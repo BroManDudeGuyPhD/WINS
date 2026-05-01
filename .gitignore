@@ -14,3 +14,5 @@ wins_pgdata/
 .DS_Store
 Thumbs.db
 WINS.md
+DOCS/NEXTSTEPS.md
+.deploy_sha

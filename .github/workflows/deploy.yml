@@ -1,4 +1,4 @@
-name: Deploy to Production
+name: Deploy to Staging
 
 on:
   push:
@@ -17,7 +17,7 @@ jobs:
 
       - name: Deploy
         env:
-          DOPPLER_TOKEN: ${{ secrets.WINS_DOPPLER_TOKEN }}
+          DOPPLER_TOKEN: ${{ secrets.WINS_DOPPLER_TOKEN_STG }}
         run: |
           set -euo pipefail
           bash scripts/deploy.sh

@@ -1,6 +1,9 @@
 """wins/alerts/main.py — Alert service entrypoint with Discord gateway presence."""
 import asyncio
+import signal
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from pathlib import Path
 
 import asyncpg
 import discord
@@ -13,7 +16,7 @@ from wins.shared.config import (
     COINGECKO_API_KEY, DATABASE_URL,
 )
 from wins.ingestion.collector import COINGECKO_IDS
-from wins.alerts.discord_bot import send_message
+from wins.alerts.discord_bot import send_message, alert_daily_spend
 from wins.alerts.presence import read_status, set_healthcheck_enabled, is_healthcheck_enabled
 
 log = get_logger("alerts.main")
@@ -91,6 +94,7 @@ class WINSBot(discord.Client):
             await self.tree.sync()
             log.info("Slash commands synced globally (may take up to 1 hour)")
         self.loop.create_task(self._presence_loop())
+        self.loop.create_task(self._daily_spend_loop())
 
     async def on_ready(self) -> None:
         log.info(f"WINS Alerts service started. Logged in as {self.user}")
@@ -111,15 +115,44 @@ class WINSBot(discord.Client):
         await send_message(msg)
 
     async def close(self) -> None:
-        enabled = is_healthcheck_enabled()
-        msg = "**WINS Alerts service shutting down.** 🔴"
-        if enabled:
-            msg += "\nHealthcheck DMs: **✅ ON**"
-        await send_message(msg)
+        try:
+            await self.change_presence(status=discord.Status.invisible)
+        except Exception:
+            pass
+        await send_message("**WINS Alerts service going offline.** 🔴")
+        if self._pool:
+            await self._pool.close()
         await super().close()
+
+    async def _daily_spend_loop(self) -> None:
+        """Post a spend summary at midnight UTC each day."""
+        await self.wait_until_ready()
+        while not self.is_closed():
+            now = datetime.now(timezone.utc)
+            midnight = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+            await asyncio.sleep((midnight - now).total_seconds())
+            if self.is_closed() or not self._pool:
+                break
+            try:
+                rows = await self._pool.fetch(
+                    """SELECT model_used,
+                              COUNT(*)                            AS decisions,
+                              COALESCE(SUM(prompt_tokens),    0)  AS prompt_tokens,
+                              COALESCE(SUM(completion_tokens),0)  AS completion_tokens,
+                              COALESCE(SUM(cache_read_tokens),0)  AS cache_read_tokens
+                         FROM decision_log
+                        WHERE ts >= NOW() - INTERVAL '24 hours'
+                          AND model_used IS NOT NULL
+                        GROUP BY model_used
+                        ORDER BY model_used"""
+                )
+                await alert_daily_spend([dict(r) for r in rows])
+            except Exception as exc:
+                log.warning(f"Daily spend summary failed: {exc}")
 
     async def _presence_loop(self) -> None:
         """Poll the shared status file every 5 s and update bot presence."""
+        _heartbeat = Path("/tmp/heartbeat")
         await self.wait_until_ready()
         while not self.is_closed():
             current = read_status()
@@ -134,6 +167,7 @@ class WINSBot(discord.Client):
                 )
                 self._last_status = current
                 log.info(f"Bot presence → {current}")
+            _heartbeat.touch()
             await asyncio.sleep(5)
 
 
@@ -271,7 +305,15 @@ async def main() -> None:
         return
 
     bot = WINSBot()
-    await bot.start(DISCORD_BOT_TOKEN)
+
+    loop = asyncio.get_running_loop()
+    loop.add_signal_handler(signal.SIGTERM, lambda: asyncio.ensure_future(bot.close()))
+
+    try:
+        await bot.start(DISCORD_BOT_TOKEN)
+    except KeyboardInterrupt:
+        if not bot.is_closed():
+            await bot.close()
 
 
 if __name__ == "__main__":
