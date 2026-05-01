@@ -73,26 +73,21 @@ class WINSBot(discord.Client):
 
     async def setup_hook(self) -> None:
         _register_commands(self)
+        # Always publish globally so commands appear in every server the bot is in.
+        # If DISCORD_GUILD_ID is set, also sync to that guild for instant dev updates
+        # (global propagation can take up to 1 hour).
+        await self.tree.sync()
+        log.info("Slash commands synced globally")
         if DISCORD_GUILD_ID:
-            # Sync to specific guild — commands appear instantly.
-            # Requires bot invited with applications.commands scope.
             guild = discord.Object(id=int(DISCORD_GUILD_ID))
             self.tree.copy_global_to(guild=guild)
             try:
                 await self.tree.sync(guild=guild)
-                log.info(f"Slash commands synced to guild {DISCORD_GUILD_ID} (instant)")
+                log.info(f"Slash commands also synced to guild {DISCORD_GUILD_ID} (instant)")
             except discord.errors.Forbidden:
                 log.warning(
-                    "Guild command sync failed (403) — bot may be missing applications.commands scope. "
-                    "Re-invite with: https://discord.com/oauth2/authorize"
-                    f"?client_id={{YOUR_APP_ID}}&scope=bot%20applications.commands&permissions=2048"
-                    " — falling back to global sync."
+                    "Guild command sync failed (403) — bot may be missing applications.commands scope."
                 )
-                await self.tree.sync()
-                log.info("Slash commands synced globally (may take up to 1 hour)")
-        else:
-            await self.tree.sync()
-            log.info("Slash commands synced globally (may take up to 1 hour)")
         self.loop.create_task(self._presence_loop())
         self.loop.create_task(self._daily_spend_loop())
 
@@ -295,6 +290,208 @@ def _register_commands(bot: WINSBot) -> None:
             embed.add_field(name=f["name"], value=f["value"], inline=False)
 
         await interaction.followup.send(embed=embed, ephemeral=True)
+
+
+    @bot.tree.command(name="status", description="System status: capital, spend, and latest brain decisions")
+    @app_commands.describe(hours="Lookback window for spend and decisions (default: 24)")
+    async def status(interaction: discord.Interaction, hours: int = 24) -> None:
+        if bot._owner_id and interaction.user.id != bot._owner_id:
+            await interaction.response.send_message(
+                "⛔ You are not authorised to control WINS.", ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        if not bot._pool:
+            await interaction.followup.send(
+                embed=discord.Embed(title="❌ Database unavailable", color=_RED),
+                ephemeral=True,
+            )
+            return
+
+        try:
+            state_row, spend_rows, decision_rows, position_rows = await asyncio.gather(
+                bot._pool.fetchrow(
+                    "SELECT * FROM system_state ORDER BY ts DESC LIMIT 1"
+                ),
+                bot._pool.fetch(
+                    """
+                    SELECT model_used,
+                           COUNT(*)                            AS decisions,
+                           COALESCE(SUM(prompt_tokens),    0)  AS prompt_tokens,
+                           COALESCE(SUM(completion_tokens),0)  AS completion_tokens,
+                           COALESCE(SUM(cache_read_tokens),0)  AS cache_read_tokens
+                      FROM decision_log
+                     WHERE ts >= NOW() - ($1 || ' hours')::interval
+                       AND model_used IS NOT NULL
+                     GROUP BY model_used
+                     ORDER BY SUM(prompt_tokens) DESC
+                    """,
+                    str(hours),
+                ),
+                bot._pool.fetch(
+                    """
+                    SELECT DISTINCT ON (token)
+                        token, action, confidence, model_used, reasoning, ts
+                      FROM decision_log
+                     WHERE ts >= NOW() - ($1 || ' hours')::interval
+                     ORDER BY token, ts DESC
+                    """,
+                    str(hours),
+                ),
+                bot._pool.fetch(
+                    """
+                    SELECT token, qty, entry_price, stop_loss_price, target_price, ts_open
+                      FROM trade_log
+                     WHERE ts_close IS NULL AND side = 'buy'
+                     ORDER BY ts_open ASC
+                    """
+                ),
+            )
+        except Exception as exc:
+            log.warning(f"/status DB query failed: {exc}")
+            await interaction.followup.send(
+                embed=discord.Embed(title="❌ DB query failed", description=str(exc), color=_RED),
+                ephemeral=True,
+            )
+            return
+
+        embeds: list[discord.Embed] = []
+
+        # ── Embed 1: System state ─────────────────────────────────────────────
+        if state_row:
+            s           = dict(state_row)
+            capital     = float(s.get("capital_usd") or 0)
+            start_cap   = float(s.get("run_starting_capital") or capital)
+            open_pos    = int(s.get("open_positions") or 0)
+            phase       = s.get("phase") or "—"
+            mode        = (s.get("trade_mode") or "paper").upper()
+            paused      = bool(s.get("system_paused"))
+            pause_reason = s.get("pause_reason") or ""
+
+            pnl     = capital - start_cap
+            pnl_pct = (pnl / start_cap * 100) if start_cap else 0
+            pnl_str = f"{'+' if pnl >= 0 else ''}{pnl:.2f} ({pnl_pct:+.1f}%)"
+
+            color   = _RED if paused else (_GREEN if pnl >= 0 else _RED)
+            status_line = "🛑 **PAUSED**" if paused else "✅ Running"
+            if paused and pause_reason:
+                status_line += f"\n> {pause_reason[:120]}"
+
+            state_embed = discord.Embed(
+                title=f"📊 WINS Status · {mode}",
+                description=status_line,
+                color=color,
+            )
+            state_embed.add_field(name="Capital",        value=f"`${capital:.2f}`",  inline=True)
+            state_embed.add_field(name="Run P&L",        value=f"`{pnl_str}`",       inline=True)
+            state_embed.add_field(name="Open Positions", value=f"`{open_pos}`",      inline=True)
+            state_embed.add_field(name="Phase",          value=f"`{phase}`",         inline=True)
+
+            if position_rows:
+                tokens_str = "  ".join(r["token"] for r in position_rows)
+                state_embed.add_field(name="Positions", value=f"`{tokens_str}`", inline=True)
+
+            embeds.append(state_embed)
+
+        # ── Embed 2: API spend ────────────────────────────────────────────────
+        _pricing: dict[str, dict[str, float]] = {
+            "haiku":  {"input": 0.80,  "output": 4.00,  "cache_read": 0.08},
+            "sonnet": {"input": 3.00,  "output": 15.00, "cache_read": 0.30},
+            "opus":   {"input": 15.00, "output": 75.00, "cache_read": 1.50},
+        }
+
+        def _tier(model: str) -> str:
+            m = (model or "").lower()
+            for t in ("haiku", "sonnet", "opus"):
+                if t in m:
+                    return t
+            return "sonnet"
+
+        def _model_cost(prompt: int, compl: int, cache: int, model: str) -> float:
+            p = _pricing[_tier(model)]
+            return prompt * p["input"] / 1_000_000 + compl * p["output"] / 1_000_000 + cache * p["cache_read"] / 1_000_000
+
+        total_cost      = 0.0
+        total_decisions = 0
+        spend_fields: list[dict] = []
+
+        for r in spend_rows:
+            model     = r["model_used"] or "unknown"
+            decisions = int(r["decisions"])
+            prompt    = int(r["prompt_tokens"])
+            compl     = int(r["completion_tokens"])
+            cache     = int(r["cache_read_tokens"])
+            cost      = _model_cost(prompt, compl, cache, model)
+            total_cost      += cost
+            total_decisions += decisions
+            tier = _tier(model).capitalize()
+            spend_fields.append({
+                "name":  f"`{tier}`",
+                "value": (
+                    f"Calls: `{decisions}` · In: `{prompt:,}` · Out: `{compl:,}` · Cache: `{cache:,}`\n"
+                    f"Est. cost: `${cost:.4f}`"
+                ),
+                "inline": True,
+            })
+
+        if spend_fields:
+            cost_color  = _GREEN if total_cost < 0.10 else (_YELLOW if total_cost < 1.00 else _RED)
+            spend_embed = discord.Embed(
+                title=f"💰 API Spend · last {hours} h",
+                description=f"**{total_decisions} decisions · Est. total: `${total_cost:.4f}`**",
+                color=cost_color,
+            )
+            for f in spend_fields:
+                spend_embed.add_field(name=f["name"], value=f["value"], inline=f["inline"])
+            spend_embed.set_footer(text="prices approximate")
+            embeds.append(spend_embed)
+        else:
+            embeds.append(discord.Embed(
+                title=f"💰 API Spend · last {hours} h",
+                description="No Claude calls in this window.",
+                color=_BLUE,
+            ))
+
+        # ── Embed 3: Brain decisions ──────────────────────────────────────────
+        _action_icon = {"buy": "🟢", "sell": "🔴", "hold": "⚪"}
+
+        if decision_rows:
+            now = datetime.now(timezone.utc)
+            decisions_embed = discord.Embed(
+                title=f"🧠 Latest Decisions · last {hours} h",
+                color=_BLUE,
+            )
+            for d in sorted(decision_rows, key=lambda r: r["token"]):
+                action  = (d["action"] or "hold").lower()
+                conf    = float(d["confidence"] or 0)
+                model   = _tier(d["model_used"] or "").capitalize()
+                ts      = d["ts"]
+                if ts:
+                    if ts.tzinfo is None:
+                        ts = ts.replace(tzinfo=timezone.utc)
+                    age_min = int((now - ts).total_seconds() / 60)
+                    age_str = f"{age_min}m ago" if age_min < 60 else f"{age_min // 60}h ago"
+                else:
+                    age_str = "?"
+
+                icon     = _action_icon.get(action, "⚪")
+                reasoning = (d["reasoning"] or "—")[:80]
+                decisions_embed.add_field(
+                    name=f"{icon} **{d['token']}** — {action.upper()}",
+                    value=f"conf: `{conf:.2f}` · {model} · {age_str}\n{reasoning}",
+                    inline=False,
+                )
+            embeds.append(decisions_embed)
+        else:
+            embeds.append(discord.Embed(
+                title=f"🧠 Latest Decisions · last {hours} h",
+                description="No decisions in this window.",
+                color=_BLUE,
+            ))
+
+        await interaction.followup.send(embeds=embeds, ephemeral=True)
 
 
 async def main() -> None:
