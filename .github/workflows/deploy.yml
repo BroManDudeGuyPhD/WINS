@@ -8,25 +8,16 @@ on:
 
 jobs:
   deploy:
-    name: SSH deploy
-    runs-on: ubuntu-latest
+    name: Deploy
+    runs-on: self-hosted
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host:     ${{ secrets.PROD_SSH_HOST }}
-          username: ${{ secrets.PROD_SSH_USER }}
-          key:      ${{ secrets.PROD_SSH_KEY }}
-          port:     ${{ secrets.PROD_SSH_PORT || 22 }}
-          envs:     DOPPLER_TOKEN
-          script: |
-            set -euo pipefail
-            cd ${{ secrets.PROD_DEPLOY_PATH }}
-            export DOPPLER_TOKEN="${DOPPLER_TOKEN}"
-            bash scripts/deploy.sh
+      - name: Deploy
         env:
           DOPPLER_TOKEN: ${{ vars.WINS_DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          bash scripts/deploy.sh
