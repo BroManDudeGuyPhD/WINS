@@ -39,6 +39,20 @@ _YELLOW = 0xf1c40f
 _BLUE   = 0x3498db
 _DARK   = 0x2c2f33
 
+# Approximate Anthropic pricing per million tokens (USD)
+_PRICING: dict[str, dict[str, float]] = {
+    "haiku":  {"input": 0.80,  "output": 4.00,  "cache_read": 0.08},
+    "sonnet": {"input": 3.00,  "output": 15.00, "cache_read": 0.30},
+    "opus":   {"input": 15.00, "output": 75.00, "cache_read": 1.50},
+}
+
+def _model_pricing(model: str) -> dict[str, float]:
+    m = model.lower()
+    for tier in ("haiku", "sonnet", "opus"):
+        if tier in m:
+            return _PRICING[tier]
+    return _PRICING["sonnet"]
+
 
 def _headers() -> dict[str, str]:
     return {
@@ -210,5 +224,62 @@ async def alert_signal_summary(
                 {"name": "Mode",       "value": f"`{mode}`",                            "inline": True},
                 {"name": "Summary",    "value": reasoning[:512] if reasoning else "—",   "inline": False},
             ],
+        }]
+    })
+
+
+async def alert_daily_spend(rows: list[dict]) -> None:
+    """Post a daily token spend summary grouped by model."""
+    if not rows:
+        await _send({
+            "embeds": [{
+                "title": "📈 Daily Spend Summary",
+                "description": "No Claude calls in the last 24 hours.",
+                "color": _BLUE,
+                "footer": {"text": "WINS · last 24 h"},
+            }]
+        })
+        return
+
+    fields = []
+    total_cost = 0.0
+    total_decisions = 0
+
+    for r in rows:
+        model      = r["model_used"] or "unknown"
+        decisions  = int(r["decisions"])
+        prompt     = int(r["prompt_tokens"])
+        completion = int(r["completion_tokens"])
+        cache_read = int(r["cache_read_tokens"])
+
+        pricing = _model_pricing(model)
+        cost = (
+            prompt     * pricing["input"]      / 1_000_000
+            + completion * pricing["output"]     / 1_000_000
+            + cache_read * pricing["cache_read"] / 1_000_000
+        )
+        total_cost       += cost
+        total_decisions  += decisions
+
+        tier = next((t.capitalize() for t in ("haiku", "sonnet", "opus") if t in model.lower()), model[:20])
+        fields.append({
+            "name":   f"`{tier}`",
+            "value":  (
+                f"Decisions: `{decisions}`\n"
+                f"In: `{prompt:,}` · Out: `{completion:,}` · Cache hit: `{cache_read:,}`\n"
+                f"Est. cost: `${cost:.4f}`"
+            ),
+            "inline": True,
+        })
+
+    color = _GREEN if total_cost < 0.10 else (_YELLOW if total_cost < 1.00 else _RED)
+
+    await _send({
+        "embeds": [{
+            "title":       "📈 Daily Spend Summary",
+            "description": f"**{total_decisions} decisions · Est. total: `${total_cost:.4f}`**",
+            "color":       color,
+            "fields":      fields,
+            "footer":      {"text": "WINS · last 24 h · prices approximate"},
         }]
     })
