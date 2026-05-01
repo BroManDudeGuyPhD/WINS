@@ -1,0 +1,16 @@
+.env
+.env.doppler
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+dist/
+build/
+*.egg
+logs/*
+!logs/.gitkeep
+wins_pgdata/
+.DS_Store
+Thumbs.db
+WINS.md

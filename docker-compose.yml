@@ -1,0 +1,91 @@
+version: "3.9"
+
+services:
+  wins-db:
+    image: postgres:16-alpine
+    container_name: wins-db
+    restart: unless-stopped
+    env_file: .env.doppler
+    environment:
+      POSTGRES_DB: wins
+    volumes:
+      - wins_pgdata:/var/lib/postgresql/data
+      - ./wins/db/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d wins"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  wins-ingestion:
+    build:
+      context: .
+      dockerfile: wins/ingestion/Dockerfile
+    pull_policy: build
+    container_name: wins-ingestion
+    restart: unless-stopped
+    env_file: .env.doppler
+    depends_on:
+      wins-db:
+        condition: service_healthy
+    volumes:
+      - ./logs:/app/logs
+    environment:
+      - SERVICE=ingestion
+
+  wins-brain:
+    build:
+      context: .
+      dockerfile: wins/brain/Dockerfile
+    pull_policy: build
+    container_name: wins-brain
+    restart: unless-stopped
+    env_file: .env.doppler
+    depends_on:
+      wins-db:
+        condition: service_healthy
+      wins-ingestion:
+        condition: service_started
+    volumes:
+      - ./logs:/app/logs
+    environment:
+      - SERVICE=brain
+
+  wins-execution:
+    build:
+      context: .
+      dockerfile: wins/execution/Dockerfile
+    pull_policy: build
+    container_name: wins-execution
+    restart: unless-stopped
+    env_file: .env.doppler
+    depends_on:
+      wins-db:
+        condition: service_healthy
+      wins-brain:
+        condition: service_started
+    volumes:
+      - ./logs:/app/logs
+    environment:
+      - SERVICE=execution
+
+  wins-alerts:
+    build:
+      context: .
+      dockerfile: wins/alerts/Dockerfile
+    pull_policy: build
+    container_name: wins-alerts
+    restart: unless-stopped
+    env_file: .env.doppler
+    depends_on:
+      wins-db:
+        condition: service_healthy
+    volumes:
+      - ./logs:/app/logs
+    environment:
+      - SERVICE=alerts
+
+volumes:
+  wins_pgdata:

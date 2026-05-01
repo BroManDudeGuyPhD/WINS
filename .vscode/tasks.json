@@ -1,0 +1,33 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    // ── Rebuild all images and restart the stack ──────────────────────────────
+    {
+      "label": "WINS: Rebuild All",
+      "type": "shell",
+      "command": "doppler run -- pwsh -NoLogo -ExecutionPolicy RemoteSigned -Command \"doppler secrets download --no-file --format env > .env.doppler; docker compose build --no-cache; docker compose up -d\"",
+      "options": { "cwd": "${workspaceFolder}" },
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "focus": true
+      },
+      "problemMatcher": []
+    },
+
+    // ── Status + Toggle (interactive) ─────────────────────────────────────────
+    {
+      "label": "WINS: Status / Toggle",
+      "type": "shell",
+      "command": "pwsh -NoLogo -ExecutionPolicy RemoteSigned -File scripts/docker_toggle.ps1",
+      "options": { "cwd": "${workspaceFolder}" },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "focus": true
+      },
+      "problemMatcher": []
+    }
+  ]
+}
