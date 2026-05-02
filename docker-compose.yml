@@ -17,22 +17,6 @@ services:
       timeout: 5s
       retries: 5
 
-  wins-ingestion:
-    build:
-      context: .
-      dockerfile: wins/ingestion/Dockerfile
-    pull_policy: build
-    container_name: wins-ingestion
-    restart: unless-stopped
-    env_file: .env.doppler
-    depends_on:
-      wins-db:
-        condition: service_healthy
-    volumes:
-      - ./logs:/app/logs
-    environment:
-      - SERVICE=ingestion
-
   wins-brain:
     build:
       context: .
@@ -44,8 +28,6 @@ services:
     depends_on:
       wins-db:
         condition: service_healthy
-      wins-ingestion:
-        condition: service_started
     volumes:
       - ./logs:/app/logs
     environment:
