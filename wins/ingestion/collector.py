@@ -7,6 +7,7 @@ import asyncio
 import httpx
 from decimal import Decimal
 from datetime import datetime, timezone
+import random
 
 from wins.shared.config import (
     COINGECKO_API_KEY, LUNARCRUSH_API_KEY, GITHUB_TOKEN,
@@ -58,6 +59,20 @@ def _symbol_to_cg_id(symbol: str) -> str | None:
 
 # ─── CoinGecko ───────────────────────────────────────────────────────────────
 
+async def _get_with_retry(client: httpx.AsyncClient, url: str, **kwargs) -> httpx.Response:
+    """GET with exponential backoff on 429."""
+    for attempt in range(4):
+        resp = await client.get(url, **kwargs)
+        if resp.status_code != 429:
+            resp.raise_for_status()
+            return resp
+        wait = (2 ** attempt) + random.uniform(0, 1)
+        log.warning(f"CoinGecko 429 — retrying in {wait:.1f}s (attempt {attempt + 1}/4)")
+        await asyncio.sleep(wait)
+    resp.raise_for_status()
+    return resp
+
+
 async def fetch_prices(client: httpx.AsyncClient, symbols: list[str]) -> dict[str, MarketSnapshot]:
     """Fetch price, volume, market cap for a list of symbols."""
     # Map symbols to CoinGecko IDs, skipping any unmapped ones
@@ -73,7 +88,8 @@ async def fetch_prices(client: httpx.AsyncClient, symbols: list[str]) -> dict[st
         return {}
 
     headers = {"x-cg-demo-api-key": COINGECKO_API_KEY} if COINGECKO_API_KEY else {}
-    resp = await client.get(
+    resp = await _get_with_retry(
+        client,
         f"{COINGECKO_BASE}/simple/price",
         params={
             "ids": ",".join(id_to_symbol.keys()),
@@ -85,7 +101,6 @@ async def fetch_prices(client: httpx.AsyncClient, symbols: list[str]) -> dict[st
         headers=headers,
         timeout=15,
     )
-    resp.raise_for_status()
     data = resp.json()
 
     snapshots: dict[str, MarketSnapshot] = {}
@@ -106,12 +121,12 @@ async def fetch_prices(client: httpx.AsyncClient, symbols: list[str]) -> dict[st
 
 async def fetch_btc_dominance(client: httpx.AsyncClient) -> Decimal:
     headers = {"x-cg-demo-api-key": COINGECKO_API_KEY} if COINGECKO_API_KEY else {}
-    resp = await client.get(
+    resp = await _get_with_retry(
+        client,
         f"{COINGECKO_BASE}/global",
         headers=headers,
         timeout=15,
     )
-    resp.raise_for_status()
     pct = resp.json()["data"]["market_cap_percentage"].get("btc", 0)
     return Decimal(str(pct))
 
