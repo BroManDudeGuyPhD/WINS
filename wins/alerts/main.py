@@ -506,6 +506,159 @@ def _register_commands(bot: WINSBot) -> None:
 
         await interaction.followup.send(embeds=embeds, ephemeral=True)
 
+    @bot.tree.command(name="braincheck", description="Validate first-run API health: cache hits, token counts, decision quality")
+    async def braincheck(interaction: discord.Interaction) -> None:
+        if bot._owner_id and interaction.user.id != bot._owner_id:
+            await interaction.response.send_message(
+                "⛔ You are not authorised to control WINS.", ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        if not bot._pool:
+            await interaction.followup.send(
+                embed=discord.Embed(title="❌ Database unavailable", color=_RED),
+                ephemeral=True,
+            )
+            return
+
+        try:
+            # Last 2 cycles worth of decisions (10 tokens × 2 = 20 rows)
+            decisions = await bot._pool.fetch(
+                """SELECT token, action, confidence, model_used,
+                          prompt_tokens, completion_tokens, cache_read_tokens, ts
+                   FROM decision_log ORDER BY ts DESC LIMIT 20"""
+            )
+            # Social cache — any rows in the last 2 hours?
+            social_count = await bot._pool.fetchval(
+                "SELECT COUNT(*) FROM signal_log WHERE ts > NOW() - INTERVAL '2 hours'"
+            )
+        except Exception as exc:
+            log.warning(f"/braincheck DB query failed: {exc}")
+            await interaction.followup.send(
+                embed=discord.Embed(title="❌ DB query failed", description=str(exc), color=_RED),
+                ephemeral=True,
+            )
+            return
+
+        checks: list[tuple[str, str, bool]] = []   # (label, detail, ok)
+
+        # ── 1. Any decisions logged? ──────────────────────────────────────────
+        if not decisions:
+            await interaction.followup.send(
+                embed=discord.Embed(
+                    title="🔴 No decisions logged yet",
+                    description="Run at least one cycle with `USE_MOCK_BRAIN=false` first.",
+                    color=_RED,
+                ),
+                ephemeral=True,
+            )
+            return
+
+        latest_ts = decisions[0]["ts"]
+        age_min   = (datetime.now(timezone.utc) - latest_ts).total_seconds() / 60
+        checks.append((
+            "Last decision age",
+            f"{age_min:.0f} min ago  ({latest_ts.strftime('%H:%M UTC')})",
+            age_min < 30,
+        ))
+
+        # ── 2. Real Claude called (not mock) ──────────────────────────────────
+        mock_rows  = [d for d in decisions if d["model_used"] == "mock"]
+        real_rows  = [d for d in decisions if d["model_used"] != "mock"]
+        checks.append((
+            "Real Claude calls",
+            f"{len(real_rows)} real / {len(mock_rows)} mock in last 20 decisions",
+            len(real_rows) > 0 and len(mock_rows) == 0,
+        ))
+
+        # ── 3. Prompt cache hitting ───────────────────────────────────────────
+        # Skip mock rows; among real rows, first call per cycle won't cache
+        cached = [d for d in real_rows if (d["cache_read_tokens"] or 0) > 0]
+        checks.append((
+            "Prompt cache hits",
+            f"{len(cached)}/{len(real_rows)} real calls had cache_read_tokens > 0",
+            len(real_rows) == 0 or len(cached) >= max(1, len(real_rows) - 5),
+        ))
+
+        # ── 4. Token counts sane ──────────────────────────────────────────────
+        bad_prompt      = [d for d in real_rows if (d["prompt_tokens"] or 0) > 4000]
+        bad_completion  = [d for d in real_rows if (d["completion_tokens"] or 0) > 600]
+        prompt_avg      = (
+            sum(d["prompt_tokens"] or 0 for d in real_rows) // len(real_rows)
+            if real_rows else 0
+        )
+        completion_avg  = (
+            sum(d["completion_tokens"] or 0 for d in real_rows) // len(real_rows)
+            if real_rows else 0
+        )
+        checks.append((
+            "Token counts",
+            f"avg prompt={prompt_avg}  avg completion={completion_avg}"
+            + (f"  ⚠️ {len(bad_prompt)} calls >4k prompt" if bad_prompt else "")
+            + (f"  ⚠️ {len(bad_completion)} calls >600 completion" if bad_completion else ""),
+            not bad_prompt and not bad_completion and prompt_avg > 0,
+        ))
+
+        # ── 5. Opus escalation rate ───────────────────────────────────────────
+        opus_rows  = [d for d in real_rows if "opus" in (d["model_used"] or "")]
+        opus_rate  = len(opus_rows) / len(real_rows) if real_rows else 0
+        checks.append((
+            "Opus escalation rate",
+            f"{len(opus_rows)}/{len(real_rows)} calls used Opus ({opus_rate*100:.0f}%)",
+            opus_rate < 0.20,
+        ))
+
+        # ── 6. Decision variety (not all holds or all buys) ───────────────────
+        actions       = [d["action"] for d in decisions]
+        action_counts = {a: actions.count(a) for a in set(actions)}
+        all_holds     = set(actions) == {"hold"}
+        all_buys      = set(actions) == {"buy"}
+        checks.append((
+            "Decision variety",
+            "  ".join(f"{a}={c}" for a, c in sorted(action_counts.items())),
+            not all_holds and not all_buys,
+        ))
+
+        # ── 7. Confidence range reasonable ───────────────────────────────────
+        confs         = [float(d["confidence"]) for d in real_rows if d["confidence"] is not None]
+        max_conf      = max(confs) if confs else 0
+        min_conf      = min(confs) if confs else 0
+        all_max_conf  = confs and all(c >= 0.95 for c in confs)
+        checks.append((
+            "Confidence range",
+            f"min={min_conf:.2f}  max={max_conf:.2f}",
+            not all_max_conf and max_conf > 0,
+        ))
+
+        # ── 8. Social caching active ──────────────────────────────────────────
+        checks.append((
+            "Social cache (signal_log)",
+            f"{social_count} rows written in last 2 h",
+            (social_count or 0) > 0,
+        ))
+
+        # ── Build embed ───────────────────────────────────────────────────────
+        failures = [c for c in checks if not c[2]]
+        overall_color = _RED if failures else _GREEN
+        overall_title = (
+            f"🔴 Brain Check — {len(failures)} issue{'s' if len(failures) != 1 else ''} found"
+            if failures else
+            "🟢 Brain Check — All systems nominal"
+        )
+
+        embed = discord.Embed(title=overall_title, color=overall_color)
+        for label, detail, ok in checks:
+            embed.add_field(
+                name=f"{'🟢' if ok else '🔴'} {label}",
+                value=detail or "—",
+                inline=False,
+            )
+
+        embed.set_footer(text=f"Based on last {len(decisions)} decisions · {datetime.now(timezone.utc).strftime('%H:%M UTC')}")
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
     @bot.tree.command(name="releasekillswitch", description="Release the kill switch and resume trading")
     async def releasekillswitch(interaction: discord.Interaction) -> None:
         if bot._owner_id and interaction.user.id != bot._owner_id:

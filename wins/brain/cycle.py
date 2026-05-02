@@ -17,6 +17,7 @@ from wins.shared.db import get_pool
 from wins.shared.logger import get_logger
 from wins.shared.models import Action, MacroGate
 from wins.ingestion.collector import collect_signal_bundles
+from wins.brain.calibration import get_calibration_multipliers
 from wins.brain.decision import make_decision
 from wins.execution.risk import validate_decision, calculate_position_size
 from wins.execution.executor import get_executor
@@ -83,6 +84,22 @@ async def _log_decision(
     return row["id"]
 
 
+async def _log_social_signals(pool: asyncpg.Pool, bundles: list) -> None:
+    """Write raw LunarCrush fields to signal_log for backtest replay."""
+    import json
+    rows = [
+        (b.token, "sentiment", json.dumps(b.social_raw), b.social_summary)
+        for b in bundles
+        if b.social_raw
+    ]
+    if rows:
+        await pool.executemany(
+            "INSERT INTO signal_log (token, signal_type, raw_data, summary) "
+            "VALUES ($1, $2, $3::jsonb, $4)",
+            rows,
+        )
+
+
 async def _persist_state(
     pool: asyncpg.Pool,
     capital: Decimal,
@@ -113,6 +130,9 @@ async def run_cycle() -> None:
     )))
 
     as_of = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    calibration_multipliers = await get_calibration_multipliers(pool)
+    if calibration_multipliers:
+        log.info(f"Calibration multipliers active: {dict(calibration_multipliers)}")
 
     # Collect signals
     write_status("ingesting")
@@ -120,6 +140,7 @@ async def run_cycle() -> None:
     if not bundles:
         log.warning("No signal bundles returned — skipping cycle.")
         return
+    await _log_social_signals(pool, bundles)
 
     # ── Step 1: Check open paper positions for SL/TP hits ─────────────────────
     if TRADE_MODE == "paper":
@@ -152,7 +173,8 @@ async def run_cycle() -> None:
         )
 
         approved, reason = validate_decision(
-            decision, capital, open_positions, starting_cap, open_position_cost
+            decision, capital, open_positions, starting_cap, open_position_cost,
+            calibration_multipliers=calibration_multipliers or None,
         )
 
         if not approved:

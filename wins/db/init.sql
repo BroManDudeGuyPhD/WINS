@@ -81,6 +81,20 @@ CREATE INDEX IF NOT EXISTS idx_trade_log_ts_open  ON trade_log (ts_open DESC);
 CREATE INDEX IF NOT EXISTS idx_signal_log_ts      ON signal_log (ts DESC);
 CREATE INDEX IF NOT EXISTS idx_macro_log_ts       ON macro_log (ts DESC);
 
+CREATE TABLE IF NOT EXISTS calibration_result (
+    id           SERIAL PRIMARY KEY,
+    ts           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    bucket       VARCHAR(20) NOT NULL,   -- low (0.65-0.75) | mid (0.75-0.85) | high (0.85+)
+    trade_count  INTEGER NOT NULL,
+    win_count    INTEGER NOT NULL,
+    win_rate     NUMERIC(5,4) NOT NULL,
+    multiplier   NUMERIC(5,4) NOT NULL,
+    enforced     BOOLEAN NOT NULL DEFAULT FALSE  -- false until trade_count >= 30
+);
+
+CREATE INDEX IF NOT EXISTS idx_calibration_result_ts     ON calibration_result (ts DESC);
+CREATE INDEX IF NOT EXISTS idx_calibration_result_bucket ON calibration_result (bucket, ts DESC);
+
 -- Migrations for existing databases (safe to re-run: ADD COLUMN IF NOT EXISTS)
 ALTER TABLE system_state  ADD COLUMN IF NOT EXISTS run_starting_capital NUMERIC(12,4);
 ALTER TABLE decision_log  ADD COLUMN IF NOT EXISTS cache_read_tokens INTEGER;

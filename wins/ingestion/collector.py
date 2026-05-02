@@ -118,9 +118,10 @@ async def fetch_btc_dominance(client: httpx.AsyncClient) -> Decimal:
 
 # ─── LunarCrush (social sentiment) ───────────────────────────────────────────
 
-async def fetch_social_summary(client: httpx.AsyncClient, symbol: str) -> str:
+async def fetch_social_summary(client: httpx.AsyncClient, symbol: str) -> tuple[str, dict]:
+    """Returns (formatted summary for Claude, raw fields dict for signal_log)."""
     if not LUNARCRUSH_API_KEY:
-        return ""
+        return "", {}
     try:
         resp = await client.get(
             f"{LUNARCRUSH_BASE}/coins/{symbol.lower()}/v1",
@@ -129,17 +130,22 @@ async def fetch_social_summary(client: httpx.AsyncClient, symbol: str) -> str:
         )
         resp.raise_for_status()
         d = resp.json().get("data", {})
-        galaxy_score = d.get("galaxy_score", "n/a")
-        alt_rank     = d.get("alt_rank", "n/a")
-        sentiment    = d.get("sentiment", "n/a")
-        interactions = d.get("interactions_24h", "n/a")
-        return (
-            f"Galaxy score: {galaxy_score}, AltRank: {alt_rank}, "
-            f"Sentiment: {sentiment}, 24h interactions: {interactions}"
+        raw = {
+            "galaxy_score":    d.get("galaxy_score"),
+            "alt_rank":        d.get("alt_rank"),
+            "sentiment":       d.get("sentiment"),
+            "interactions_24h": d.get("interactions_24h"),
+        }
+        summary = (
+            f"Galaxy score: {raw['galaxy_score'] or 'n/a'}, "
+            f"AltRank: {raw['alt_rank'] or 'n/a'}, "
+            f"Sentiment: {raw['sentiment'] or 'n/a'}, "
+            f"24h interactions: {raw['interactions_24h'] or 'n/a'}"
         )
+        return summary, raw
     except Exception as exc:
         log.warning(f"LunarCrush fetch failed for {symbol}: {exc}")
-        return ""
+        return "", {}
 
 
 # ─── GitHub developer activity ───────────────────────────────────────────────
@@ -216,7 +222,7 @@ async def collect_signal_bundles() -> list[SignalBundle]:
         if not market:
             log.warning(f"No price data for {symbol}, skipping.")
             return None
-        social, github, news = await asyncio.gather(
+        (social, social_raw), github, news = await asyncio.gather(
             fetch_social_summary(client, symbol),
             fetch_github_summary(client, symbol),
             fetch_news_summary(client, symbol),
@@ -227,6 +233,7 @@ async def collect_signal_bundles() -> list[SignalBundle]:
             macro          = btc_snapshot,
             news_summary   = news,
             social_summary = social,
+            social_raw     = social_raw,
             github_summary = github,
         )
 
