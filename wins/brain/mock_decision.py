@@ -24,7 +24,7 @@ log = get_logger("brain.mock")
 # Thresholds used by mock rules
 _BTC_FREEFALL_PCT   = Decimal("-5.0")   # BTC drop that triggers macro block
 _BTC_DOMINANCE_RISE = Decimal("0.5")    # dominance delta considered "rising sharply" (placeholder)
-_STRONG_PUMP_PCT    = Decimal("0.5")    # TEMP: lowered for testing (restore to 8.0)
+_STRONG_PUMP_PCT    = Decimal("8.0")    # 24h gain that triggers buy signal
 _STRONG_DUMP_PCT    = Decimal("-8.0")   # 24h loss that triggers caution/sell signal
 _MIN_VOLUME_USD     = Decimal("10_000_000")   # skip illiquid tokens
 

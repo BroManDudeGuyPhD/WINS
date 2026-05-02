@@ -26,6 +26,7 @@ def validate_decision(
     open_positions: int,
     starting_capital_usd: Decimal,
     open_position_cost: Decimal = Decimal("0"),
+    calibration_multipliers: dict | None = None,
 ) -> tuple[bool, str]:
     """
     Returns (approved: bool, reason: str).
@@ -40,10 +41,17 @@ def validate_decision(
     if decision.macro_gate == MacroGate.block:
         return False, "Macro gate blocked — risk-off environment."
 
-    # 3. Minimum confidence threshold
-    if decision.confidence < MIN_CONFIDENCE_TO_TRADE:
+    # 3. Minimum confidence threshold (with optional calibration adjustment)
+    effective_confidence = decision.confidence
+    if calibration_multipliers:
+        from wins.brain.calibration import apply_calibration
+        effective_confidence = apply_calibration(decision.confidence, calibration_multipliers)
+    if effective_confidence < MIN_CONFIDENCE_TO_TRADE:
+        raw_note = (
+            f" (raw {decision.confidence}, calibrated)" if calibration_multipliers else ""
+        )
         return False, (
-            f"Confidence {decision.confidence} below minimum {MIN_CONFIDENCE_TO_TRADE}."
+            f"Confidence {effective_confidence:.3f}{raw_note} below minimum {MIN_CONFIDENCE_TO_TRADE}."
         )
 
     # 4. Max open positions

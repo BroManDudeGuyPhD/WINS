@@ -228,6 +228,40 @@ async def alert_signal_summary(
     })
 
 
+async def alert_calibration_report(rows: list[dict]) -> None:
+    """Post the weekly confidence calibration report."""
+    from wins.brain.calibration import format_calibration_report, MIN_TRADES_TO_ENFORCE
+
+    any_enforced = any(r["enforced"] for r in rows)
+    total_trades = sum(r["trade_count"] for r in rows)
+    color = _GREEN if any_enforced else _YELLOW
+
+    fields = []
+    _labels = {"low": "0.65–0.75", "mid": "0.75–0.85", "high": "0.85+"}
+    for r in rows:
+        label  = _labels.get(r["bucket"], r["bucket"])
+        status = "enforced" if r["enforced"] else f"display-only ({r['trade_count']}/{MIN_TRADES_TO_ENFORCE})"
+        fields.append({
+            "name":   f"`{label}`",
+            "value":  (
+                f"Trades: `{r['trade_count']}`  Wins: `{r['win_count']}`\n"
+                f"Win rate: `{r['win_rate']:.1%}`  Multiplier: `{r['multiplier']:.3f}`\n"
+                f"Status: `{status}`"
+            ),
+            "inline": True,
+        })
+
+    await _send({
+        "embeds": [{
+            "title":       "📐 Calibration Report",
+            "description": f"{total_trades} closed buy trades analysed",
+            "color":       color,
+            "fields":      fields,
+            "footer":      {"text": "WINS · weekly confidence calibration"},
+        }]
+    })
+
+
 async def alert_daily_spend(rows: list[dict]) -> None:
     """Post a daily token spend summary grouped by model."""
     if not rows:

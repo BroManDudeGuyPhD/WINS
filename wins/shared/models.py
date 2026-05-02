@@ -78,5 +78,6 @@ class SignalBundle(BaseModel):
     macro:             MarketSnapshot          # BTC snapshot
     news_summary:      str = ""
     social_summary:    str = ""
+    social_raw:        dict = Field(default_factory=dict)  # raw LunarCrush fields for signal_log
     onchain_summary:   str = ""
     github_summary:    str = ""
