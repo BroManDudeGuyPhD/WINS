@@ -25,6 +25,7 @@ def validate_decision(
     capital_usd: Decimal,
     open_positions: int,
     starting_capital_usd: Decimal,
+    open_position_cost: Decimal = Decimal("0"),
 ) -> tuple[bool, str]:
     """
     Returns (approved: bool, reason: str).
@@ -74,8 +75,9 @@ def validate_decision(
         # Position sizing uses half capital cap — enforced at order time in executor.py
         log.info(f"Max allowed position: ${max_position_usd:.2f}")
 
-    # 7. Drawdown kill switch
-    drawdown = (starting_capital_usd - capital_usd) / starting_capital_usd
+    # 7. Drawdown kill switch — uses realized losses only, not committed position capital
+    effective_capital = capital_usd + open_position_cost
+    drawdown = (starting_capital_usd - effective_capital) / starting_capital_usd
     if drawdown >= DRAWDOWN_KILL_SWITCH:
         return False, (
             f"KILL SWITCH: Drawdown {drawdown:.1%} >= {DRAWDOWN_KILL_SWITCH:.0%}. "

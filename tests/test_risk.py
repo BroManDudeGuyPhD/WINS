@@ -133,14 +133,14 @@ def test_rr_above_2_passes():
 # ─── Rule 7: Drawdown kill switch ────────────────────────────────────────────
 
 def test_kill_switch_fires_at_40pct():
-    # Started at 1000, now at 590 → 41% drawdown
+    # Started at 1000, now at 590 liquid, no open positions → 41% realized loss
     ok, reason = validate_decision(_buy(), Decimal("590.00"), OPEN_POS, STARTING_CAP)
     assert not ok
     assert "KILL SWITCH" in reason
 
 
 def test_kill_switch_does_not_fire_below_40pct():
-    # 39% drawdown — should still allow trades
+    # 39% realized drawdown — should still allow trades
     ok, _ = validate_decision(_buy(), Decimal("611.00"), OPEN_POS, STARTING_CAP)
     assert ok
 
@@ -154,6 +154,31 @@ def test_kill_switch_uses_starting_capital_not_current():
         starting_capital_usd=Decimal("1000.00"),
     )
     assert ok
+
+
+def test_kill_switch_ignores_committed_position_capital():
+    # Started at 100, 50 liquid + 50 committed in open position = no realized loss
+    ok, _ = validate_decision(
+        _buy(),
+        capital_usd=Decimal("50.00"),
+        open_positions=1,
+        starting_capital_usd=Decimal("100.00"),
+        open_position_cost=Decimal("50.00"),
+    )
+    assert ok
+
+
+def test_kill_switch_fires_on_realized_loss_with_open_positions():
+    # Started at 1000, 150 liquid + 400 committed = 550 effective → 45% realized loss
+    ok, reason = validate_decision(
+        _buy(),
+        capital_usd=Decimal("150.00"),
+        open_positions=1,
+        starting_capital_usd=Decimal("1000.00"),
+        open_position_cost=Decimal("400.00"),
+    )
+    assert not ok
+    assert "KILL SWITCH" in reason
 
 
 # ─── Rule 8: risk_flag=high blocks ───────────────────────────────────────────
