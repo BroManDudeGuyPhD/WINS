@@ -13,7 +13,7 @@ from discord import app_commands
 from wins.shared.logger import get_logger
 from wins.shared.config import (
     DISCORD_BOT_TOKEN, DISCORD_USER_ID, DISCORD_GUILD_ID,
-    COINGECKO_API_KEY, DATABASE_URL,
+    COINGECKO_API_KEY, DATABASE_URL, DRAWDOWN_KILL_SWITCH,
 )
 from wins.ingestion.collector import COINGECKO_IDS
 from wins.alerts.discord_bot import send_message, alert_daily_spend
@@ -23,6 +23,7 @@ log = get_logger("alerts.main")
 
 _GREEN  = 0x2ecc71
 _RED    = 0xe74c3c
+_YELLOW = 0xf1c40f
 _BLUE   = 0x3498db
 
 # Maps status value → (discord.Status, activity text shown under bot name)
@@ -376,8 +377,6 @@ def _register_commands(bot: WINSBot) -> None:
 
             color   = _RED if paused else (_GREEN if pnl >= 0 else _RED)
             status_line = "🛑 **PAUSED**" if paused else "✅ Running"
-            if paused and pause_reason:
-                status_line += f"\n> {pause_reason[:120]}"
 
             state_embed = discord.Embed(
                 title=f"📊 WINS Status · {mode}",
@@ -392,6 +391,20 @@ def _register_commands(bot: WINSBot) -> None:
             if position_rows:
                 tokens_str = "  ".join(r["token"] for r in position_rows)
                 state_embed.add_field(name="Positions", value=f"`{tokens_str}`", inline=True)
+
+            if paused:
+                drawdown = (start_cap - capital) / start_cap if start_cap else 0
+                ks_lines = [
+                    f"**Reason:** {pause_reason or '—'}",
+                    f"**Drawdown:** `{drawdown:.1%}` (threshold `{float(DRAWDOWN_KILL_SWITCH):.0%}`)",
+                    f"**Capital:** `${capital:.2f}` started at `${start_cap:.2f}` (loss `${start_cap - capital:.2f}`)",
+                    "Use `/releasekillswitch` to resume trading.",
+                ]
+                state_embed.add_field(
+                    name="🚨 Kill Switch Details",
+                    value="\n".join(ks_lines),
+                    inline=False,
+                )
 
             embeds.append(state_embed)
 
@@ -492,6 +505,71 @@ def _register_commands(bot: WINSBot) -> None:
             ))
 
         await interaction.followup.send(embeds=embeds, ephemeral=True)
+
+    @bot.tree.command(name="releasekillswitch", description="Release the kill switch and resume trading")
+    async def releasekillswitch(interaction: discord.Interaction) -> None:
+        if bot._owner_id and interaction.user.id != bot._owner_id:
+            await interaction.response.send_message(
+                "⛔ You are not authorised to control WINS.", ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        if not bot._pool:
+            await interaction.followup.send(
+                embed=discord.Embed(title="❌ Database unavailable", color=_RED),
+                ephemeral=True,
+            )
+            return
+
+        try:
+            state = await bot._pool.fetchrow(
+                "SELECT system_paused, pause_reason FROM system_state ORDER BY ts DESC LIMIT 1"
+            )
+        except Exception as exc:
+            log.warning(f"/releasekillswitch DB query failed: {exc}")
+            await interaction.followup.send(
+                embed=discord.Embed(title="❌ DB query failed", description=str(exc), color=_RED),
+                ephemeral=True,
+            )
+            return
+
+        if not state or not state["system_paused"]:
+            await interaction.followup.send(
+                embed=discord.Embed(
+                    title="ℹ️ System not paused",
+                    description="The kill switch is not currently active.",
+                    color=_BLUE,
+                ),
+                ephemeral=True,
+            )
+            return
+
+        prior_reason = state["pause_reason"] or "unknown"
+
+        try:
+            await bot._pool.execute(
+                "UPDATE system_state SET system_paused=FALSE, pause_reason=NULL "
+                "WHERE id=(SELECT MAX(id) FROM system_state)"
+            )
+        except Exception as exc:
+            log.warning(f"/releasekillswitch DB update failed: {exc}")
+            await interaction.followup.send(
+                embed=discord.Embed(title="❌ DB update failed", description=str(exc), color=_RED),
+                ephemeral=True,
+            )
+            return
+
+        log.warning(f"Kill switch released by {interaction.user}. Prior reason: {prior_reason}")
+        embed = discord.Embed(
+            title="✅ Kill Switch Released",
+            description="System is now **unpaused**. Trading will resume on the next cycle.",
+            color=_GREEN,
+        )
+        embed.add_field(name="Prior pause reason", value=prior_reason[:512], inline=False)
+        embed.add_field(name="Released by", value=str(interaction.user), inline=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 async def main() -> None:
