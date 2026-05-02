@@ -67,7 +67,7 @@ async def _get_with_retry(client: httpx.AsyncClient, url: str, **kwargs) -> http
             resp.raise_for_status()
             return resp
         wait = (2 ** attempt) + random.uniform(0, 1)
-        log.warning(f"CoinGecko 429 — retrying in {wait:.1f}s (attempt {attempt + 1}/4)")
+        log.warning(f"429 from {url} — retrying in {wait:.1f}s (attempt {attempt + 1}/4)")
         await asyncio.sleep(wait)
     resp.raise_for_status()
     return resp
@@ -138,17 +138,17 @@ async def fetch_social_summary(client: httpx.AsyncClient, symbol: str) -> tuple[
     if not LUNARCRUSH_API_KEY:
         return "", {}
     try:
-        resp = await client.get(
+        resp = await _get_with_retry(
+            client,
             f"{LUNARCRUSH_BASE}/coins/{symbol.lower()}/v1",
             headers={"Authorization": f"Bearer {LUNARCRUSH_API_KEY}"},
             timeout=15,
         )
-        resp.raise_for_status()
         d = resp.json().get("data", {})
         raw = {
-            "galaxy_score":    d.get("galaxy_score"),
-            "alt_rank":        d.get("alt_rank"),
-            "sentiment":       d.get("sentiment"),
+            "galaxy_score":     d.get("galaxy_score"),
+            "alt_rank":         d.get("alt_rank"),
+            "sentiment":        d.get("sentiment"),
             "interactions_24h": d.get("interactions_24h"),
         }
         summary = (
