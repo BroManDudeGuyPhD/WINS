@@ -107,6 +107,10 @@ async def run_cycle() -> None:
     open_positions     = state["open_positions"]
     # Use the run's starting capital for drawdown calc (not current — fixes kill-switch bug)
     starting_cap       = Decimal(str(state["run_starting_capital"]))
+    # Sum of (qty × entry_price) for all open positions — excluded from drawdown calc
+    open_position_cost = Decimal(str(await pool.fetchval(
+        "SELECT COALESCE(SUM(qty * entry_price), 0) FROM trade_log WHERE ts_close IS NULL AND side = 'buy'"
+    )))
 
     as_of = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -148,7 +152,7 @@ async def run_cycle() -> None:
         )
 
         approved, reason = validate_decision(
-            decision, capital, open_positions, starting_cap
+            decision, capital, open_positions, starting_cap, open_position_cost
         )
 
         if not approved:
@@ -183,8 +187,9 @@ async def run_cycle() -> None:
                 sl_order_id,
             )
 
-            open_positions += 1
-            capital        -= position_usd
+            open_positions     += 1
+            capital            -= position_usd
+            open_position_cost += position_usd
 
             # Persist immediately after each trade to protect against mid-cycle crash
             await _persist_state(pool, capital, open_positions)
