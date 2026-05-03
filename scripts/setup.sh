@@ -83,13 +83,19 @@ for i in $(seq 1 20); do
     fi
 done
 
-# ── 5. Smoke test — one mock cycle ────────────────────────────────────────────
-
-echo "--- Running mock cycle smoke test ---"
+# ── 5. Migrations ────────────────────────────────────────────────────────────
 
 DB_URL=$(doppler secrets get DATABASE_URL --plain)
 # Remap Docker-internal hostname to localhost for local execution
 LOCAL_DB_URL="${DB_URL/wins-db:5432/localhost:5433}"
+
+echo "--- Running DB migrations ---"
+DATABASE_URL="$LOCAL_DB_URL" "$PYTHON" scripts/migrate_social_history.py
+echo "✓ Migrations complete"
+
+# ── 6. Smoke test — one mock cycle ────────────────────────────────────────────
+
+echo "--- Running mock cycle smoke test ---"
 
 USE_MOCK_BRAIN=true \
 TRADE_MODE=paper \
