@@ -11,12 +11,12 @@ from decimal import Decimal
 import asyncpg
 
 from wins.shared.config import (
-    TRADE_MODE, MAX_SINGLE_POSITION_PCT, DRAWDOWN_KILL_SWITCH,
+    TRADE_MODE, MAX_SINGLE_POSITION_PCT, DRAWDOWN_KILL_SWITCH, LUNARCRUSH_API_KEY,
 )
 from wins.shared.db import get_pool
 from wins.shared.logger import get_logger
 from wins.shared.models import Action, MacroGate
-from wins.ingestion.collector import collect_signal_bundles
+from wins.ingestion.collector import collect_signal_bundles, apply_social_filter
 from wins.brain.calibration import get_calibration_multipliers
 from wins.brain.decision import make_decision
 from wins.execution.risk import validate_decision, calculate_position_size
@@ -141,6 +141,7 @@ async def run_cycle() -> None:
         log.warning("No signal bundles returned — skipping cycle.")
         return
     await _log_social_signals(pool, bundles)
+    await apply_social_filter(pool, bundles)
 
     # ── Step 1: Check open paper positions for SL/TP hits ─────────────────────
     if TRADE_MODE == "paper":
@@ -159,6 +160,22 @@ async def run_cycle() -> None:
             "capital_usd":    float(capital),
             "open_positions": open_positions,
         }
+
+        # Skip Claude when a configured data source failed to deliver.
+        # Missing social data is an API outage, not a genuine "no signal" scenario —
+        # calling Claude on an incomplete bundle wastes tokens and distorts reasoning.
+        if LUNARCRUSH_API_KEY and not bundle.social_data_ok:
+            log.warning(
+                f"Skipping Claude for {bundle.token}: LunarCrush fetch failed "
+                f"(API key is set). Holding until data recovers."
+            )
+            continue
+
+        # Social pre-filter: backtest-derived gate suppresses Claude calls when
+        # social signal is directionally against entry (contrarian or weak bullish).
+        if bundle.social_filter_verdict == "skip":
+            log.info(f"Social filter suppressed Claude call for {bundle.token} — holding.")
+            continue
 
         decision, model_used, input_tokens, output_tokens, cache_read_tokens = make_decision(
             bundle, account_state=account_state, as_of=as_of,

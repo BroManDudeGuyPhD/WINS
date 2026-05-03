@@ -5,6 +5,7 @@ Returns a SignalBundle per target token every decision cycle.
 """
 import asyncio
 import httpx
+import asyncpg
 from decimal import Decimal
 from datetime import datetime, timezone
 import random
@@ -133,34 +134,143 @@ async def fetch_btc_dominance(client: httpx.AsyncClient) -> Decimal:
 
 # ─── LunarCrush (social sentiment) ───────────────────────────────────────────
 
-async def fetch_social_summary(client: httpx.AsyncClient, symbol: str) -> tuple[str, dict]:
-    """Returns (formatted summary for Claude, raw fields dict for signal_log)."""
+async def fetch_social_summary(client: httpx.AsyncClient, symbol: str) -> tuple[str, dict, bool]:
+    """
+    Returns (summary_for_claude, raw_fields_dict, fetch_ok).
+    Uses time-series/v2 for a 2-day window to get the full social metric set
+    (social_dominance, sentiment, interactions_24h, galaxy_score, alt_rank).
+    The v1 snapshot endpoint does not return sentiment/interactions/social_dominance.
+    """
+    import time as _time
     if not LUNARCRUSH_API_KEY:
-        return "", {}
+        return "", {}, True  # no key configured — absence is expected, not an error
     try:
+        now = int(_time.time())
         resp = await _get_with_retry(
             client,
-            f"{LUNARCRUSH_BASE}/coins/{symbol.lower()}/v1",
+            f"{LUNARCRUSH_BASE}/coins/{symbol.upper()}/time-series/v2",
             headers={"Authorization": f"Bearer {LUNARCRUSH_API_KEY}"},
-            timeout=15,
+            params={"start": now - 2 * 86400, "end": now},
+            timeout=20,
         )
-        d = resp.json().get("data", {})
+        body = resp.json()
+        rows = body.get("data", [])
+        if not rows:
+            log.warning(f"LunarCrush time-series returned empty data for {symbol}. Body: {str(body)[:300]}")
+            return "", {}, False
+        # Use the most recent row
+        latest = rows[-1]
         raw = {
-            "galaxy_score":     d.get("galaxy_score"),
-            "alt_rank":         d.get("alt_rank"),
-            "sentiment":        d.get("sentiment"),
-            "interactions_24h": d.get("interactions_24h"),
+            "galaxy_score":     latest.get("galaxy_score"),
+            "alt_rank":         latest.get("alt_rank"),
+            "sentiment":        latest.get("sentiment"),
+            "interactions_24h": latest.get("interactions_24h") or latest.get("interactions"),
+            "social_dominance": latest.get("social_dominance"),
         }
+        dom = raw["social_dominance"]
         summary = (
             f"Galaxy score: {raw['galaxy_score'] or 'n/a'}, "
             f"AltRank: {raw['alt_rank'] or 'n/a'}, "
             f"Sentiment: {raw['sentiment'] or 'n/a'}, "
             f"24h interactions: {raw['interactions_24h'] or 'n/a'}"
+            + (f", social dominance: {dom:.4f}%" if dom is not None else "")
         )
-        return summary, raw
+        return summary, raw, True
+    except httpx.HTTPStatusError as exc:
+        log.warning(
+            f"LunarCrush HTTP {exc.response.status_code} for {symbol}: "
+            f"{exc.response.text[:300]}"
+        )
+        return "", {}, False
     except Exception as exc:
         log.warning(f"LunarCrush fetch failed for {symbol}: {exc}")
-        return "", {}
+        return "", {}, False
+
+
+# ─── Social filter (percentile-based pre-Claude gate) ────────────────────────
+
+# Backtest-derived directionality (730-day OOS-confirmed signal).
+# "contrarian": high social_dominance → negative forward returns → skip buys
+# "bullish":    high social_dominance → positive forward returns → boost buys
+_SOCIAL_DIRECTION: dict[str, str] = {
+    "SOL": "contrarian",
+    "SUI": "bullish",
+}
+_CONTRARIAN_SKIP_ABOVE = 60.0   # skip SOL buy when social in top 40%
+_BULLISH_SKIP_BELOW    = 40.0   # skip SUI buy when social in bottom 40%
+_BULLISH_BOOST_ABOVE   = 70.0   # boost SUI when social in top 30%
+
+
+async def _social_dominance_percentile(
+    pool: asyncpg.Pool, token: str, value: float
+) -> float | None:
+    """Return 0-100 percentile rank of `value` within last 90 days of social_history."""
+    row = await pool.fetchrow(
+        """
+        SELECT
+            COUNT(*) FILTER (WHERE social_dominance <= $2) * 100.0 / NULLIF(COUNT(*), 0) AS pct
+        FROM social_history
+        WHERE token = $1
+          AND date >= CURRENT_DATE - INTERVAL '90 days'
+          AND social_dominance IS NOT NULL
+        """,
+        token, value,
+    )
+    if row is None or row["pct"] is None:
+        return None
+    return float(row["pct"])
+
+
+async def apply_social_filter(pool: asyncpg.Pool, bundles: list[SignalBundle]) -> None:
+    """
+    Enriches each bundle with social_dominance_pct and social_filter_verdict.
+    Mutates bundles in place. Runs after collect_signal_bundles().
+    Degrades gracefully if social_history table is empty or missing.
+    """
+    for bundle in bundles:
+        raw_dom = bundle.social_raw.get("social_dominance")
+        if raw_dom is None:
+            continue  # v1 endpoint didn't return social_dominance — proceed normally
+
+        bundle.social_dominance = float(raw_dom)
+        direction = _SOCIAL_DIRECTION.get(bundle.token)
+        if direction is None:
+            continue  # no backtest signal for this token
+
+        try:
+            pct = await _social_dominance_percentile(pool, bundle.token, bundle.social_dominance)
+        except Exception as exc:
+            log.warning(f"Social filter skipped for {bundle.token}: {exc}")
+            continue
+
+        if pct is None:
+            log.info(f"Social filter: no history yet for {bundle.token} — proceeding without filter")
+            continue
+
+        bundle.social_dominance_pct = pct
+
+        if direction == "contrarian" and pct >= _CONTRARIAN_SKIP_ABOVE:
+            bundle.social_filter_verdict = "skip"
+            log.info(
+                f"Social filter SKIP {bundle.token}: contrarian, "
+                f"social_dominance at {pct:.0f}th pct (threshold >{_CONTRARIAN_SKIP_ABOVE:.0f})"
+            )
+        elif direction == "bullish" and pct <= _BULLISH_SKIP_BELOW:
+            bundle.social_filter_verdict = "skip"
+            log.info(
+                f"Social filter SKIP {bundle.token}: bullish but social weak, "
+                f"social_dominance at {pct:.0f}th pct (threshold <{_BULLISH_SKIP_BELOW:.0f})"
+            )
+        elif direction == "bullish" and pct >= _BULLISH_BOOST_ABOVE:
+            bundle.social_filter_verdict = "boost"
+            bundle.social_summary += (
+                f" [Social confirming: dominance at {pct:.0f}th percentile (90d), "
+                f"historically strong entry zone for {bundle.token}]"
+            )
+            log.info(
+                f"Social filter BOOST {bundle.token}: social confirming, "
+                f"social_dominance at {pct:.0f}th pct"
+            )
 
 
 # ─── GitHub developer activity ───────────────────────────────────────────────
@@ -237,19 +347,20 @@ async def collect_signal_bundles() -> list[SignalBundle]:
         if not market:
             log.warning(f"No price data for {symbol}, skipping.")
             return None
-        (social, social_raw), github, news = await asyncio.gather(
+        (social, social_raw, social_ok), github, news = await asyncio.gather(
             fetch_social_summary(client, symbol),
             fetch_github_summary(client, symbol),
             fetch_news_summary(client, symbol),
         )
         return SignalBundle(
-            token          = symbol,
-            market         = market,
-            macro          = btc_snapshot,
-            news_summary   = news,
-            social_summary = social,
-            social_raw     = social_raw,
-            github_summary = github,
+            token           = symbol,
+            market          = market,
+            macro           = btc_snapshot,
+            news_summary    = news,
+            social_summary  = social,
+            social_raw      = social_raw,
+            social_data_ok  = social_ok,
+            github_summary  = github,
         )
 
     timeout = httpx.Timeout(15.0)

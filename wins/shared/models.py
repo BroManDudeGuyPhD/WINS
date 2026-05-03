@@ -73,11 +73,15 @@ class MarketSnapshot(BaseModel):
 
 class SignalBundle(BaseModel):
     """All pre-processed signals handed to the brain for one cycle."""
-    token:             str
-    market:            MarketSnapshot
-    macro:             MarketSnapshot          # BTC snapshot
-    news_summary:      str = ""
-    social_summary:    str = ""
-    social_raw:        dict = Field(default_factory=dict)  # raw LunarCrush fields for signal_log
-    onchain_summary:   str = ""
-    github_summary:    str = ""
+    token:                  str
+    market:                 MarketSnapshot
+    macro:                  MarketSnapshot          # BTC snapshot
+    news_summary:           str = ""
+    social_summary:         str = ""
+    social_raw:             dict = Field(default_factory=dict)  # raw LunarCrush fields for signal_log
+    social_data_ok:         bool = True             # False = LunarCrush key set but fetch failed
+    social_dominance:       Optional[float] = None  # current snapshot value
+    social_dominance_pct:   Optional[float] = None  # 0-100, rolling 90-day percentile rank
+    social_filter_verdict:  str = "proceed"         # "skip" | "proceed" | "boost"
+    onchain_summary:        str = ""
+    github_summary:         str = ""

@@ -1,0 +1,439 @@
+Devil's advocate social signal backtest
+  History  : 730d (requesting 750d with buffer)
+  Tokens   : 10 (BTC, ETH, SOL, AVAX, LINK, DOT, ATOM, NEAR, AAVE, UNI)
+  Tests    : rolling stability · extreme quantiles · OOS split · contrarian · composite
+  LC key   : ...df4c0d
+  Runtime  : ~1.1 min API  +  compute
+  Output   : output/backtest_extended_20260503_010231.txt
+  Started  : 2026-05-03 01:02:31
+
+[BTC] Fetching 750d regime data… 751 hourly-agg days returned
+
+[1/10] BTC  (reusing pre-fetched data)
+
+══════════════════════════════════════════════════════════════
+  BTC  (737 analysis rows)  (CONTRARIAN mode)
+══════════════════════════════════════════════════════════════
+
+  [1] Rolling 90d Pearson — social_dominance
+    Hz    MeanR    StdR   %Pos          Range  Stability
+  ──────────────────────────────────────────────────────────
+    5d   +0.052   0.164   73%  [-0.43,+0.33]  noise
+   10d   +0.063   0.252   73%  [-0.49,+0.49]  REGIME DEPENDENT
+   14d   +0.073   0.290   73%  [-0.56,+0.58]  REGIME DEPENDENT
+
+  [2] Extreme quantile — social_dominance → 5d return
+   Pct  Top_n  Top_win  Top_avg  Bot_win  Bot_avg     Lift
+  ──────────────────────────────────────────────────────────
+    5%     36    52.8%   -0.37%      38.9%   -1.06%   +0.69pp
+   10%     73    50.7%   +0.08%      53.4%   +0.26%   -0.18pp
+
+  [3] Out-of-sample split (50/50 chronological) — social_dominance
+    Hz   Train_r    Test_r    Degrad   Consistent  Verdict
+  ─────────────────────────────────────────────────────────────────
+    2d    +0.054    -0.073    -0.127          NO   noise / overfit
+    5d    +0.123    -0.137    -0.260          NO   noise / overfit
+   10d    +0.135    -0.119    -0.255          NO   noise / overfit
+   14d    +0.176    -0.105    -0.282          NO   noise / overfit
+
+  [4] Contrarian test — buy when social_dominance is LOW
+    Hz  Low_win  High_win  Low_avg  High_avg     Lift  Actionable
+  ─────────────────────────────────────────────────────────────────
+    5d    54.5%     50.5%   +0.60%      -0.08%   +0.68pp  YES
+   10d    56.9%     47.0%   +1.06%      -0.05%   +1.11pp  YES
+   14d    58.3%     47.0%   +1.49%      -0.07%   +1.56pp  YES
+
+  [5] Composite z-score signal — contrarian (social_dominance⁻¹ + interactions⁻¹ + sentiment⁻¹)
+    Hz        r   sig   Q4_win   Q1_win     Lift
+  ──────────────────────────────────────────────────
+    1d   +0.026         49.7%    46.4%   +0.22pp
+    2d   +0.027         53.0%    47.5%   +0.41pp
+    5d   +0.041         56.4%    43.6%   +1.15pp
+   10d   +0.046         56.4%    40.3%   +1.67pp
+   14d   +0.060         61.3%    42.5%   +2.02pp
+
+[2/10] ETH
+  Fetching 750d… 751 days returned
+
+══════════════════════════════════════════════════════════════
+  ETH  (737 analysis rows)  (CONTRARIAN mode)
+══════════════════════════════════════════════════════════════
+
+  [1] Rolling 90d Pearson — social_dominance
+    Hz    MeanR    StdR   %Pos          Range  Stability
+  ──────────────────────────────────────────────────────────
+    5d   -0.050   0.219   40%  [-0.52,+0.30]  REGIME DEPENDENT
+   10d   -0.098   0.318   33%  [-0.69,+0.54]  REGIME DEPENDENT
+   14d   -0.090   0.358   27%  [-0.70,+0.68]  REGIME DEPENDENT
+
+  [2] Extreme quantile — social_dominance → 5d return
+   Pct  Top_n  Top_win  Top_avg  Bot_win  Bot_avg     Lift
+  ──────────────────────────────────────────────────────────
+    5%     36    41.7%   +0.20%      55.6%   +2.66%   -2.46pp
+   10%     73    45.2%   +0.24%      54.8%   +2.47%   -2.24pp
+
+  [3] Out-of-sample split (50/50 chronological) — social_dominance
+    Hz   Train_r    Test_r    Degrad   Consistent  Verdict
+  ─────────────────────────────────────────────────────────────────
+    2d    -0.039    +0.010    +0.049          NO   noise / overfit
+    5d    -0.043    -0.012    +0.031          YES  noise
+   10d    -0.098    +0.002    +0.100          NO   noise / overfit
+   14d    -0.106    +0.013    +0.119          NO   noise / overfit
+
+  [4] Contrarian test — buy when social_dominance is LOW
+    Hz  Low_win  High_win  Low_avg  High_avg     Lift  Actionable
+  ─────────────────────────────────────────────────────────────────
+    5d    48.8%     50.3%   -0.05%      +0.34%   -0.39pp  no
+   10d    45.0%     47.6%   +0.34%      +0.20%   +0.14pp  no
+   14d    46.6%     45.4%   +0.55%      +0.20%   +0.35pp  no
+
+  [5] Composite z-score signal — contrarian (social_dominance⁻¹ + interactions⁻¹ + sentiment⁻¹)
+    Hz        r   sig   Q4_win   Q1_win     Lift
+  ──────────────────────────────────────────────────
+    1d   +0.020         47.5%    48.1%   +0.56pp
+    2d   +0.016         51.4%    42.5%   +1.05pp
+    5d   +0.021         56.9%    41.4%   +2.27pp
+   10d   +0.055         59.1%    40.9%   +5.14pp
+   14d   +0.063         63.5%    42.5%   +5.77pp
+
+[3/10] SOL
+  Fetching 750d… 751 days returned
+
+══════════════════════════════════════════════════════════════
+  SOL  (737 analysis rows)  (CONTRARIAN mode)
+══════════════════════════════════════════════════════════════
+
+  [1] Rolling 90d Pearson — social_dominance
+    Hz    MeanR    StdR   %Pos          Range  Stability
+  ──────────────────────────────────────────────────────────
+    5d   -0.227   0.117    0%  [-0.43,-0.01]  STABLE SIGNAL
+   10d   -0.301   0.176    7%  [-0.51,+0.07]  weak consistent
+   14d   -0.280   0.208   13%  [-0.58,+0.06]  REGIME DEPENDENT
+
+  [2] Extreme quantile — social_dominance → 5d return
+   Pct  Top_n  Top_win  Top_avg  Bot_win  Bot_avg     Lift
+  ──────────────────────────────────────────────────────────
+    5%     36    19.4%   -5.83%      63.9%   +3.38%   -9.21pp
+   10%     73    21.9%   -5.70%      65.8%   +4.23%   -9.94pp
+
+  [3] Out-of-sample split (50/50 chronological) — social_dominance
+    Hz   Train_r    Test_r    Degrad   Consistent  Verdict
+  ─────────────────────────────────────────────────────────────────
+    2d    -0.157    -0.196    -0.039          YES  REAL SIGNAL
+    5d    -0.272    -0.273    -0.001          YES  REAL SIGNAL
+   10d    -0.397    -0.329    +0.068          YES  REAL SIGNAL
+   14d    -0.456    -0.299    +0.158          YES  REAL SIGNAL
+
+  [4] Contrarian test — buy when social_dominance is LOW
+    Hz  Low_win  High_win  Low_avg  High_avg     Lift  Actionable
+  ─────────────────────────────────────────────────────────────────
+    5d    53.7%     45.1%   +1.61%      -1.51%   +3.12pp  YES
+   10d    58.8%     42.1%   +2.81%      -2.74%   +5.55pp  YES
+   14d    56.1%     38.3%   +3.62%      -3.64%   +7.25pp  YES
+
+  [5] Composite z-score signal — contrarian (social_dominance⁻¹ + interactions⁻¹ + sentiment⁻¹)
+    Hz        r   sig   Q4_win   Q1_win     Lift
+  ──────────────────────────────────────────────────
+    1d   +0.067         58.0%    43.6%   +0.73pp
+    2d   +0.064         56.9%    45.3%   +1.22pp
+    5d   +0.129  ***    61.3%    41.4%   +3.38pp
+   10d   +0.175  ***    65.7%    37.0%   +5.75pp
+   14d   +0.158  ***    62.4%    36.5%   +6.32pp
+
+[4/10] AVAX
+  Fetching 750d… 751 days returned
+
+══════════════════════════════════════════════════════════════
+  AVAX  (737 analysis rows)  (bullish mode)
+══════════════════════════════════════════════════════════════
+
+  [1] Rolling 90d Pearson — social_dominance
+    Hz    MeanR    StdR   %Pos          Range  Stability
+  ──────────────────────────────────────────────────────────
+    5d   -0.093   0.170   20%  [-0.38,+0.31]  noise
+   10d   -0.045   0.222   40%  [-0.46,+0.39]  REGIME DEPENDENT
+   14d   -0.066   0.253   47%  [-0.55,+0.43]  REGIME DEPENDENT
+
+  [2] Extreme quantile — social_dominance → 5d return
+   Pct  Top_n  Top_win  Top_avg  Bot_win  Bot_avg     Lift
+  ──────────────────────────────────────────────────────────
+    5%     36    30.6%   -3.70%      55.6%   +0.43%   -4.12pp
+   10%     73    39.7%   -1.97%      47.9%   -0.54%   -1.42pp
+
+  [3] Out-of-sample split (50/50 chronological) — social_dominance
+    Hz   Train_r    Test_r    Degrad   Consistent  Verdict
+  ─────────────────────────────────────────────────────────────────
+    2d    -0.078    +0.039    +0.117          NO   noise / overfit
+    5d    -0.090    +0.101    +0.191          NO   noise / overfit
+   10d    -0.061    +0.127    +0.188          NO   noise / overfit
+   14d    -0.095    +0.145    +0.240          NO   noise / overfit
+
+  [5] Composite z-score signal — bullish (social_dominance + sentiment + galaxy_score)
+    Hz        r   sig   Q4_win   Q1_win     Lift
+  ──────────────────────────────────────────────────
+    1d   -0.064         48.6%    49.7%   -0.45pp
+    2d   -0.093  *      40.9%    52.5%   -1.57pp
+    5d   -0.111  **     39.2%    50.3%   -2.62pp
+   10d   -0.062         43.1%    49.7%   -2.80pp
+   14d   -0.067         40.3%    45.3%   -3.28pp
+
+[5/10] LINK
+  Fetching 750d… 751 days returned
+
+══════════════════════════════════════════════════════════════
+  LINK  (737 analysis rows)  (bullish mode)
+══════════════════════════════════════════════════════════════
+
+  [1] Rolling 90d Pearson — social_dominance
+    Hz    MeanR    StdR   %Pos          Range  Stability
+  ──────────────────────────────────────────────────────────
+    5d   -0.126   0.197   40%  [-0.50,+0.21]  weak consistent
+   10d   -0.139   0.222   33%  [-0.46,+0.23]  REGIME DEPENDENT
+   14d   -0.161   0.251   40%  [-0.53,+0.16]  REGIME DEPENDENT
+
+  [2] Extreme quantile — social_dominance → 5d return
+   Pct  Top_n  Top_win  Top_avg  Bot_win  Bot_avg     Lift
+  ──────────────────────────────────────────────────────────
+    5%     36    55.6%   +0.90%      61.1%   +0.99%   -0.08pp
+   10%     73    54.8%   +3.00%      58.9%   +1.13%   +1.87pp
+
+  [3] Out-of-sample split (50/50 chronological) — social_dominance
+    Hz   Train_r    Test_r    Degrad   Consistent  Verdict
+  ─────────────────────────────────────────────────────────────────
+    2d    -0.050    +0.057    +0.107          NO   noise / overfit
+    5d    -0.113    +0.097    +0.210          NO   noise / overfit
+   10d    -0.080    +0.095    +0.176          NO   noise / overfit
+   14d    -0.122    +0.085    +0.207          NO   noise / overfit
+
+  [5] Composite z-score signal — bullish (social_dominance + sentiment + galaxy_score)
+    Hz        r   sig   Q4_win   Q1_win     Lift
+  ──────────────────────────────────────────────────
+    1d   -0.034         44.2%    53.0%   -0.90pp
+    2d   -0.050         41.4%    54.7%   -1.55pp
+    5d   -0.084  *      42.5%    55.8%   -2.77pp
+   10d   -0.054         40.9%    56.9%   -3.26pp
+   14d   -0.069         41.4%    51.9%   -3.95pp
+
+[6/10] DOT
+  Fetching 750d… 751 days returned
+
+══════════════════════════════════════════════════════════════
+  DOT  (737 analysis rows)  (bullish mode)
+══════════════════════════════════════════════════════════════
+
+  [1] Rolling 90d Pearson — social_dominance
+    Hz    MeanR    StdR   %Pos          Range  Stability
+  ──────────────────────────────────────────────────────────
+    5d   +0.000   0.082   53%  [-0.12,+0.13]  noise
+   10d   +0.035   0.132   60%  [-0.20,+0.26]  noise
+   14d   +0.056   0.164   67%  [-0.22,+0.29]  noise
+
+  [2] Extreme quantile — social_dominance → 5d return
+   Pct  Top_n  Top_win  Top_avg  Bot_win  Bot_avg     Lift
+  ──────────────────────────────────────────────────────────
+    5%     36    36.1%   -1.34%      19.4%   -4.04%   +2.70pp
+   10%     73    49.3%   -0.15%      35.6%   -1.66%   +1.51pp
+
+  [3] Out-of-sample split (50/50 chronological) — social_dominance
+    Hz   Train_r    Test_r    Degrad   Consistent  Verdict
+  ─────────────────────────────────────────────────────────────────
+    2d    +0.001    +0.090    +0.089          YES  weak consistent
+    5d    -0.006    +0.137    +0.143          NO   noise / overfit
+   10d    -0.001    +0.151    +0.152          NO   noise / overfit
+   14d    -0.023    +0.198    +0.220          NO   noise / overfit
+
+  [5] Composite z-score signal — bullish (social_dominance + sentiment + galaxy_score)
+    Hz        r   sig   Q4_win   Q1_win     Lift
+  ──────────────────────────────────────────────────
+    1d   -0.012         42.0%    43.6%   +0.07pp
+    2d   -0.024         43.1%    43.1%   -0.33pp
+    5d   -0.036         42.0%    42.0%   +0.29pp
+   10d   -0.037         39.8%    45.9%   -0.71pp
+   14d   -0.002         38.1%    38.7%   +0.32pp
+
+[7/10] ATOM
+  Fetching 750d… 751 days returned
+
+══════════════════════════════════════════════════════════════
+  ATOM  (737 analysis rows)  (bullish mode)
+══════════════════════════════════════════════════════════════
+
+  [1] Rolling 90d Pearson — social_dominance
+    Hz    MeanR    StdR   %Pos          Range  Stability
+  ──────────────────────────────────────────────────────────
+    5d   -0.053   0.124   33%  [-0.29,+0.20]  noise
+   10d   -0.075   0.180   40%  [-0.38,+0.22]  noise
+   14d   -0.056   0.197   40%  [-0.48,+0.20]  noise
+
+  [2] Extreme quantile — social_dominance → 5d return
+   Pct  Top_n  Top_win  Top_avg  Bot_win  Bot_avg     Lift
+  ──────────────────────────────────────────────────────────
+    5%     36    41.7%   -1.56%      52.8%   -0.08%   -1.48pp
+   10%     73    54.8%   -0.07%      47.9%   -0.38%   +0.32pp
+
+  [3] Out-of-sample split (50/50 chronological) — social_dominance
+    Hz   Train_r    Test_r    Degrad   Consistent  Verdict
+  ─────────────────────────────────────────────────────────────────
+    2d    -0.056    -0.007    +0.049          YES  noise
+    5d    -0.055    -0.036    +0.018          YES  noise
+   10d    -0.058    -0.122    -0.064          YES  REAL SIGNAL
+   14d    -0.048    -0.105    -0.057          YES  weak consistent
+
+  [5] Composite z-score signal — bullish (social_dominance + sentiment + galaxy_score)
+    Hz        r   sig   Q4_win   Q1_win     Lift
+  ──────────────────────────────────────────────────
+    1d   +0.029         45.3%    45.9%   +0.38pp
+    2d   -0.015         51.9%    47.5%   -0.33pp
+    5d   -0.097  **     39.8%    47.5%   -2.67pp
+   10d   -0.113  **     29.8%    48.6%   -4.49pp
+   14d   -0.101  **     27.6%    49.2%   -4.84pp
+
+[8/10] NEAR
+  Fetching 750d… 751 days returned
+
+══════════════════════════════════════════════════════════════
+  NEAR  (737 analysis rows)  (bullish mode)
+══════════════════════════════════════════════════════════════
+
+  [1] Rolling 90d Pearson — social_dominance
+    Hz    MeanR    StdR   %Pos          Range  Stability
+  ──────────────────────────────────────────────────────────
+    5d   -0.108   0.178   27%  [-0.37,+0.12]  weak consistent
+   10d   -0.100   0.259   40%  [-0.54,+0.20]  REGIME DEPENDENT
+   14d   -0.075   0.326   47%  [-0.61,+0.38]  REGIME DEPENDENT
+
+  [2] Extreme quantile — social_dominance → 5d return
+   Pct  Top_n  Top_win  Top_avg  Bot_win  Bot_avg     Lift
+  ──────────────────────────────────────────────────────────
+    5%     36    38.9%   -0.58%      36.1%   -2.37%   +1.79pp
+   10%     73    39.7%   -0.09%      50.7%   +1.89%   -1.98pp
+
+  [3] Out-of-sample split (50/50 chronological) — social_dominance
+    Hz   Train_r    Test_r    Degrad   Consistent  Verdict
+  ─────────────────────────────────────────────────────────────────
+    2d    +0.015    -0.012    -0.028          NO   noise / overfit
+    5d    +0.018    -0.020    -0.037          NO   noise / overfit
+   10d    +0.026    -0.011    -0.037          NO   noise / overfit
+   14d    +0.004    +0.022    +0.018          YES  noise
+
+  [5] Composite z-score signal — bullish (social_dominance + sentiment + galaxy_score)
+    Hz        r   sig   Q4_win   Q1_win     Lift
+  ──────────────────────────────────────────────────
+    1d   -0.024         48.1%    55.8%   -0.56pp
+    2d   -0.049         50.8%    53.0%   -1.37pp
+    5d   -0.081  *      46.4%    50.3%   -3.38pp
+   10d   -0.048         43.1%    52.5%   -3.79pp
+   14d   -0.054         40.9%    48.6%   -4.10pp
+
+[9/10] AAVE
+  Fetching 750d… 751 days returned
+
+══════════════════════════════════════════════════════════════
+  AAVE  (737 analysis rows)  (bullish mode)
+══════════════════════════════════════════════════════════════
+
+  [1] Rolling 90d Pearson — social_dominance
+    Hz    MeanR    StdR   %Pos          Range  Stability
+  ──────────────────────────────────────────────────────────
+    5d   -0.155   0.235   27%  [-0.50,+0.17]  REGIME DEPENDENT
+   10d   -0.154   0.292   33%  [-0.74,+0.27]  REGIME DEPENDENT
+   14d   -0.132   0.304   33%  [-0.70,+0.33]  REGIME DEPENDENT
+
+  [2] Extreme quantile — social_dominance → 5d return
+   Pct  Top_n  Top_win  Top_avg  Bot_win  Bot_avg     Lift
+  ──────────────────────────────────────────────────────────
+    5%     36    44.4%   -0.41%      25.0%   -4.28%   +3.87pp
+   10%     73    42.5%   -0.62%      24.7%   -3.85%   +3.23pp
+
+  [3] Out-of-sample split (50/50 chronological) — social_dominance
+    Hz   Train_r    Test_r    Degrad   Consistent  Verdict
+  ─────────────────────────────────────────────────────────────────
+    2d    -0.075    +0.078    +0.154          NO   noise / overfit
+    5d    -0.140    +0.086    +0.226          NO   noise / overfit
+   10d    -0.140    +0.132    +0.272          NO   noise / overfit
+   14d    -0.143    +0.175    +0.318          NO   noise / overfit
+
+  [5] Composite z-score signal — bullish (social_dominance + sentiment + galaxy_score)
+    Hz        r   sig   Q4_win   Q1_win     Lift
+  ──────────────────────────────────────────────────
+    1d   -0.022         44.2%    47.0%   -0.49pp
+    2d   -0.047         39.8%    51.9%   -1.44pp
+    5d   -0.082  *      38.7%    54.1%   -3.05pp
+   10d   -0.120  **     39.2%    50.8%   -4.91pp
+   14d   -0.098  **     41.4%    47.5%   -4.29pp
+
+[10/10] UNI
+  Fetching 750d… 751 days returned
+
+══════════════════════════════════════════════════════════════
+  UNI  (737 analysis rows)  (bullish mode)
+══════════════════════════════════════════════════════════════
+
+  [1] Rolling 90d Pearson — social_dominance
+    Hz    MeanR    StdR   %Pos          Range  Stability
+  ──────────────────────────────────────────────────────────
+    5d   -0.180   0.209   27%  [-0.45,+0.19]  REGIME DEPENDENT
+   10d   -0.155   0.247   27%  [-0.49,+0.32]  REGIME DEPENDENT
+   14d   -0.118   0.273   40%  [-0.49,+0.40]  REGIME DEPENDENT
+
+  [2] Extreme quantile — social_dominance → 5d return
+   Pct  Top_n  Top_win  Top_avg  Bot_win  Bot_avg     Lift
+  ──────────────────────────────────────────────────────────
+    5%     36    22.2%   -6.07%      50.0%   +0.84%   -6.91pp
+   10%     73    32.9%   -3.45%      39.7%   +0.42%   -3.87pp
+
+  [3] Out-of-sample split (50/50 chronological) — social_dominance
+    Hz   Train_r    Test_r    Degrad   Consistent  Verdict
+  ─────────────────────────────────────────────────────────────────
+    2d    -0.139    -0.009    +0.130          YES  noise
+    5d    -0.152    +0.021    +0.173          NO   noise / overfit
+   10d    -0.066    +0.039    +0.105          NO   noise / overfit
+   14d    -0.044    +0.110    +0.154          NO   noise / overfit
+
+  [5] Composite z-score signal — bullish (social_dominance + sentiment + galaxy_score)
+    Hz        r   sig   Q4_win   Q1_win     Lift
+  ──────────────────────────────────────────────────
+    1d   -0.037         39.8%    45.3%   -0.28pp
+    2d   -0.056         41.4%    45.9%   -0.92pp
+    5d   -0.082  *      42.5%    45.3%   -1.91pp
+   10d   -0.084  *      38.1%    43.1%   -2.77pp
+   14d   -0.048         37.0%    41.4%   -1.43pp
+
+
+══════════════════════════════════════════════════════════════
+  DEVIL'S ADVOCATE VERDICT  (10 tokens, 730d history)
+══════════════════════════════════════════════════════════════
+
+  Metric                                         Result
+  ───────────────────────────────────────────────────────
+  Tokens with REAL OOS signal (|test_r|>0.12):  2/10
+  Tokens with weak OOS signal (|test_r|>0.06):  3/10
+  Tokens with stable rolling correlation:        1/10
+  Tokens with extreme-quantile edge (>1pp lift): 9/10
+  Contrarian tokens with actionable edge:        2/3
+  Avg composite signal lift:                     -0.65pp
+
+  ── OOS per token ────────────────────────────────────────────
+  BTC    best OOS at 5d:  train=+0.123  test=-0.137  consistent=✗
+  ETH    best OOS at 14d:  train=-0.106  test=+0.013  consistent=✗
+  SOL    best OOS at 10d:  train=-0.397  test=-0.329  consistent=✓
+  AVAX   best OOS at 14d:  train=-0.095  test=+0.145  consistent=✗
+  LINK   best OOS at 5d:  train=-0.113  test=+0.097  consistent=✗
+  DOT    best OOS at 14d:  train=-0.023  test=+0.198  consistent=✗
+  ATOM   best OOS at 10d:  train=-0.058  test=-0.122  consistent=✓
+  NEAR   best OOS at 14d:  train=+0.004  test=+0.022  consistent=✓
+  AAVE   best OOS at 14d:  train=-0.143  test=+0.175  consistent=✗
+  UNI    best OOS at 14d:  train=-0.044  test=+0.110  consistent=✗
+
+  ── Final verdict ─────────────────────────────────────────────
+
+  >>> AMBIGUOUS — see per-token detail
+
+  Interpretation guide:
+  OOS consistent = signal survived train/test split (not noise)
+  Stable rolling = r sign consistent across all 90d windows
+  Extreme edge   = top/bottom 5-10% of signal readings show >1pp return diff
+  Contrarian     = for BTC/SOL/ETH, low social → better entry point
+
+Done. 10/10 tokens analysed.
+Full results saved to: output/backtest_extended_20260503_010231.txt
