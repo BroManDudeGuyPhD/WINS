@@ -95,6 +95,26 @@ CREATE TABLE IF NOT EXISTS calibration_result (
 CREATE INDEX IF NOT EXISTS idx_calibration_result_ts     ON calibration_result (ts DESC);
 CREATE INDEX IF NOT EXISTS idx_calibration_result_bucket ON calibration_result (bucket, ts DESC);
 
+-- Social history: daily per-token LunarCrush metrics for backtesting & live percentile ranking
+CREATE TABLE IF NOT EXISTS social_history (
+    id               BIGSERIAL PRIMARY KEY,
+    ts               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    token            VARCHAR(20) NOT NULL,
+    date             DATE NOT NULL,
+    social_dominance DOUBLE PRECISION,
+    interactions_24h DOUBLE PRECISION,
+    sentiment        DOUBLE PRECISION,
+    galaxy_score     DOUBLE PRECISION,
+    alt_rank         INTEGER,
+    price_open       DOUBLE PRECISION,
+    price_close      DOUBLE PRECISION,
+    price_high       DOUBLE PRECISION,
+    price_low        DOUBLE PRECISION,
+    volume_24h       DOUBLE PRECISION,
+    UNIQUE (token, date)
+);
+CREATE INDEX IF NOT EXISTS idx_social_history_token_date ON social_history (token, date DESC);
+
 -- Migrations for existing databases (safe to re-run: ADD COLUMN IF NOT EXISTS)
 ALTER TABLE system_state  ADD COLUMN IF NOT EXISTS run_starting_capital NUMERIC(12,4);
 ALTER TABLE decision_log  ADD COLUMN IF NOT EXISTS cache_read_tokens INTEGER;

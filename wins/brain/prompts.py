@@ -71,9 +71,14 @@ def build_user_message(
     """
     import json
 
-    # Strip empty/unavailable signal fields so Claude sees only real data
+    # Strip empty/unavailable signal fields so Claude sees only real data.
+    # Also strip internal filter bookkeeping fields — context is surfaced via social_summary.
     signal_fields = ("news_summary", "social_summary", "onchain_summary", "github_summary")
-    filtered = {k: v for k, v in bundle_dict.items() if k not in signal_fields or v}
+    internal_fields = ("social_dominance", "social_dominance_pct", "social_filter_verdict")
+    filtered = {
+        k: v for k, v in bundle_dict.items()
+        if k not in internal_fields and (k not in signal_fields or v)
+    }
 
     payload: dict = {}
     if as_of:
