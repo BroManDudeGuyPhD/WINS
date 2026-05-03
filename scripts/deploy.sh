@@ -20,5 +20,30 @@ doppler secrets download --no-file --format env --config stg > .env.doppler
 
 docker compose build
 docker compose up -d
+
+echo "--- Running DB migrations ---"
+docker compose exec -T wins-db psql -U wins -d wins -f - <<'SQL'
+CREATE TABLE IF NOT EXISTS social_history (
+    id               BIGSERIAL PRIMARY KEY,
+    ts               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    token            VARCHAR(20) NOT NULL,
+    date             DATE NOT NULL,
+    social_dominance DOUBLE PRECISION,
+    interactions_24h DOUBLE PRECISION,
+    sentiment        DOUBLE PRECISION,
+    galaxy_score     DOUBLE PRECISION,
+    alt_rank         INTEGER,
+    price_open       DOUBLE PRECISION,
+    price_close      DOUBLE PRECISION,
+    price_high       DOUBLE PRECISION,
+    price_low        DOUBLE PRECISION,
+    volume_24h       DOUBLE PRECISION,
+    UNIQUE (token, date)
+);
+CREATE INDEX IF NOT EXISTS idx_social_history_token_date ON social_history (token, date DESC);
+SELECT COUNT(*) AS existing_rows FROM social_history;
+SQL
+echo "✓ Migrations complete"
+
 docker compose ps
 echo "=== Deploy complete ==="
