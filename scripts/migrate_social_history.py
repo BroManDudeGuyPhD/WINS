@@ -3,18 +3,19 @@ scripts/migrate_social_history.py
 One-time migration: creates social_history table on an existing WINS database.
 Safe to re-run — uses IF NOT EXISTS.
 
+Requires only stdlib + psql (no asyncpg) so it runs on bare CI runners.
+
 Usage:
     python scripts/migrate_social_history.py
 """
-import asyncio
 import os
+import subprocess
 import sys
-
-import asyncpg
+from urllib.parse import urlparse
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
-DDL = """
+DDL = """\
 CREATE TABLE IF NOT EXISTS social_history (
     id               BIGSERIAL PRIMARY KEY,
     ts               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -33,24 +34,38 @@ CREATE TABLE IF NOT EXISTS social_history (
     UNIQUE (token, date)
 );
 CREATE INDEX IF NOT EXISTS idx_social_history_token_date ON social_history (token, date DESC);
+SELECT COUNT(*) AS existing_rows FROM social_history;
 """
 
 
-async def main() -> None:
+def main() -> None:
     if not DATABASE_URL:
         print("ERROR: DATABASE_URL not set in environment.")
         sys.exit(1)
 
-    print("Connecting to database...")
-    conn = await asyncpg.connect(DATABASE_URL)
-    try:
-        await conn.execute(DDL)
-        print("social_history table created (or already exists).")
-        count = await conn.fetchval("SELECT COUNT(*) FROM social_history")
-        print(f"Current row count: {count}")
-    finally:
-        await conn.close()
+    u = urlparse(DATABASE_URL)
+    env = {**os.environ, "PGPASSWORD": u.password or ""}
+    cmd = [
+        "psql",
+        "--host", u.hostname,
+        "--port", str(u.port or 5432),
+        "--username", u.username,
+        "--dbname", u.path.lstrip("/"),
+        "--command", DDL,
+    ]
+
+    print(f"Connecting to {u.hostname}:{u.port or 5432}/{u.path.lstrip('/')} as {u.username}...")
+    result = subprocess.run(cmd, env=env, capture_output=True, text=True)
+
+    if result.stdout:
+        print(result.stdout)
+    if result.stderr:
+        print(result.stderr, file=sys.stderr)
+    if result.returncode != 0:
+        sys.exit(result.returncode)
+
+    print("Migration complete.")
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
