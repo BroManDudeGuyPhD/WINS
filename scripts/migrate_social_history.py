@@ -13,7 +13,7 @@ import subprocess
 import sys
 from urllib.parse import urlparse
 
-DATABASE_URL = os.environ.get("DATABASE_URL", "")
+DATABASE_URL = os.environ.get("DATABASE_URL", "") or (sys.argv[1] if len(sys.argv) > 1 else "")
 
 DDL = """\
 CREATE TABLE IF NOT EXISTS social_history (
