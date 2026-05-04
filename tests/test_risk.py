@@ -90,6 +90,27 @@ def test_max_open_positions_blocked():
     assert "Max open positions" in reason
 
 
+def test_pyramiding_blocked():
+    # Already holding SOL — buying SOL again is rejected even with slot available
+    d = _buy()
+    ok, reason = validate_decision(
+        d, CAPITAL, open_positions=1, starting_capital_usd=STARTING_CAP,
+        held_tokens={"SOL"},
+    )
+    assert not ok
+    assert "no pyramiding" in reason.lower()
+
+
+def test_pyramiding_allows_different_token():
+    # Holding ETH, buying SOL — allowed
+    d = _buy()
+    ok, _ = validate_decision(
+        d, CAPITAL, open_positions=1, starting_capital_usd=STARTING_CAP,
+        held_tokens={"ETH"},
+    )
+    assert ok
+
+
 # ─── Rule 5: Stop loss > 20% blocked ─────────────────────────────────────────
 
 def test_sl_too_wide_blocked():

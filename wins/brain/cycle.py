@@ -128,6 +128,11 @@ async def run_cycle() -> None:
     open_position_cost = Decimal(str(await pool.fetchval(
         "SELECT COALESCE(SUM(qty * entry_price), 0) FROM trade_log WHERE ts_close IS NULL AND side = 'buy'"
     )))
+    held_tokens = {
+        r["token"] for r in await pool.fetch(
+            "SELECT DISTINCT token FROM trade_log WHERE ts_close IS NULL AND side = 'buy'"
+        )
+    }
 
     as_of = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     calibration_multipliers = await get_calibration_multipliers(pool)
@@ -150,6 +155,7 @@ async def run_cycle() -> None:
         for c in closed:
             capital        += Decimal(str(c["cost_usd"])) + Decimal(str(c["pnl_usd"]))
             open_positions  = max(0, open_positions - 1)
+            held_tokens.discard(c["token"])
             await alert_trade_closed(c["token"], c["pnl_usd"], c["pnl_pct"], c["exit_reason"], TRADE_MODE)
 
     executor = get_executor()
@@ -192,6 +198,7 @@ async def run_cycle() -> None:
         approved, reason = validate_decision(
             decision, capital, open_positions, starting_cap, open_position_cost,
             calibration_multipliers=calibration_multipliers or None,
+            held_tokens=held_tokens,
         )
 
         if not approved:
@@ -229,6 +236,7 @@ async def run_cycle() -> None:
             open_positions     += 1
             capital            -= position_usd
             open_position_cost += position_usd
+            held_tokens.add(fill["token"])
 
             # Persist immediately after each trade to protect against mid-cycle crash
             await _persist_state(pool, capital, open_positions)
