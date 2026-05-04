@@ -27,6 +27,7 @@ def validate_decision(
     starting_capital_usd: Decimal,
     open_position_cost: Decimal = Decimal("0"),
     calibration_multipliers: dict | None = None,
+    held_tokens: set[str] | None = None,
 ) -> tuple[bool, str]:
     """
     Returns (approved: bool, reason: str).
@@ -58,6 +59,16 @@ def validate_decision(
     if decision.action == Action.buy and open_positions >= MAX_OPEN_POSITIONS:
         return False, (
             f"Max open positions ({MAX_OPEN_POSITIONS}) already reached."
+        )
+
+    # 4b. No pyramiding — one position per token. Prevents both
+    # position slots from being consumed by the same coin.
+    if (decision.action == Action.buy
+            and held_tokens
+            and decision.token in held_tokens):
+        return False, (
+            f"Already holding an open position in {decision.token} — "
+            f"no pyramiding."
         )
 
     # 5. Stop loss distance and R:R enforcement
