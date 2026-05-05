@@ -38,9 +38,18 @@ def validate_decision(
     if decision.action == Action.hold:
         return True, "Hold — no execution required."
 
-    # 2. Macro gate blocks all entries/exits
-    if decision.macro_gate == MacroGate.block:
+    # 2. Macro gate blocks new entries only. Sells must be allowed during
+    # risk-off — that is exactly when a discretionary exit is most useful.
+    if decision.action == Action.buy and decision.macro_gate == MacroGate.block:
         return False, "Macro gate blocked — risk-off environment."
+
+    # 2b. Sells are only valid for tokens we currently hold.
+    if (decision.action == Action.sell
+            and held_tokens is not None
+            and decision.token not in held_tokens):
+        return False, (
+            f"Sell rejected: {decision.token} is not in open positions."
+        )
 
     # 3. Minimum confidence threshold (with optional calibration adjustment)
     effective_confidence = decision.confidence

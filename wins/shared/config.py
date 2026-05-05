@@ -12,7 +12,7 @@ MAX_STOP_LOSS_PCT       = Decimal("0.20")   # 20% max loss per trade
 MAX_SINGLE_POSITION_PCT = Decimal("0.50")   # 50% max of capital in one trade
 DRAWDOWN_KILL_SWITCH    = Decimal("0.40")   # Pause system if down 40% in a run
 MIN_CONFIDENCE_TO_TRADE = Decimal("0.65")   # Minimum Claude confidence for entry
-MAX_OPEN_POSITIONS      = 2                 # Never hold more than 2 positions
+MAX_OPEN_POSITIONS      = 3                 # Never hold more than 3 positions
 
 # ─── Claude models ───────────────────────────────────────────────────────────
 HAIKU_MODEL  = "claude-haiku-4-5-20251001"
