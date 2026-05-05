@@ -85,7 +85,7 @@ def test_exact_min_confidence_passes():
 
 def test_max_open_positions_blocked():
     d = _buy()
-    ok, reason = validate_decision(d, CAPITAL, open_positions=2, starting_capital_usd=STARTING_CAP)
+    ok, reason = validate_decision(d, CAPITAL, open_positions=3, starting_capital_usd=STARTING_CAP)
     assert not ok
     assert "Max open positions" in reason
 
