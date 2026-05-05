@@ -117,10 +117,17 @@ def _aggregate_to_daily(hourly_rows: list[dict]) -> list[dict]:
             "price_low":        min(lows)  if lows   else None,
             "volume_24h":       max(vols)  if vols   else None,
             "social_dominance": avg_val("social_dominance"),
-            "interactions_24h": last_val("interactions_24h"),
-            "sentiment":        avg_val("sentiment"),
-            "galaxy_score":     avg_val("galaxy_score"),
-            "alt_rank":         last_val("alt_rank"),
+            # API field is `interactions`, not `interactions_24h`. Mirror into both columns
+            # so legacy queries keep working while new queries can use `interactions`.
+            "interactions":         last_val("interactions"),
+            "interactions_24h":     last_val("interactions"),
+            "sentiment":            avg_val("sentiment"),
+            "galaxy_score":         avg_val("galaxy_score"),
+            "alt_rank":             last_val("alt_rank"),
+            "contributors_active":  avg_val("contributors_active"),
+            "posts_active":         avg_val("posts_active"),
+            "posts_created":        avg_val("posts_created"),
+            "spam":                 avg_val("spam"),
         })
     return daily
 
@@ -146,6 +153,11 @@ async def upsert_daily_rows(pool: asyncpg.Pool, symbol: str, rows: list[dict]) -
             row.get("price_high"),
             row.get("price_low"),
             row.get("volume_24h"),
+            row.get("interactions"),
+            row.get("contributors_active"),
+            row.get("posts_active"),
+            row.get("posts_created"),
+            row.get("spam"),
         )
         for row in rows
     ]
@@ -154,20 +166,26 @@ async def upsert_daily_rows(pool: asyncpg.Pool, symbol: str, rows: list[dict]) -
         """
         INSERT INTO social_history
             (token, date, social_dominance, interactions_24h, sentiment,
-             galaxy_score, alt_rank, price_open, price_close, price_high, price_low, volume_24h)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+             galaxy_score, alt_rank, price_open, price_close, price_high, price_low, volume_24h,
+             interactions, contributors_active, posts_active, posts_created, spam)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
         ON CONFLICT (token, date) DO UPDATE SET
-            social_dominance = EXCLUDED.social_dominance,
-            interactions_24h = EXCLUDED.interactions_24h,
-            sentiment        = EXCLUDED.sentiment,
-            galaxy_score     = EXCLUDED.galaxy_score,
-            alt_rank         = EXCLUDED.alt_rank,
-            price_open       = EXCLUDED.price_open,
-            price_close      = EXCLUDED.price_close,
-            price_high       = EXCLUDED.price_high,
-            price_low        = EXCLUDED.price_low,
-            volume_24h       = EXCLUDED.volume_24h,
-            ts               = NOW()
+            social_dominance     = EXCLUDED.social_dominance,
+            interactions_24h     = EXCLUDED.interactions_24h,
+            sentiment            = EXCLUDED.sentiment,
+            galaxy_score         = EXCLUDED.galaxy_score,
+            alt_rank             = EXCLUDED.alt_rank,
+            price_open           = EXCLUDED.price_open,
+            price_close          = EXCLUDED.price_close,
+            price_high           = EXCLUDED.price_high,
+            price_low            = EXCLUDED.price_low,
+            volume_24h           = EXCLUDED.volume_24h,
+            interactions         = EXCLUDED.interactions,
+            contributors_active  = EXCLUDED.contributors_active,
+            posts_active         = EXCLUDED.posts_active,
+            posts_created        = EXCLUDED.posts_created,
+            spam                 = EXCLUDED.spam,
+            ts                   = NOW()
         """,
         records,
     )

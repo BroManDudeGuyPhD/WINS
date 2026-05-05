@@ -161,11 +161,17 @@ async def fetch_social_summary(client: httpx.AsyncClient, symbol: str) -> tuple[
         # Use the most recent row
         latest = rows[-1]
         raw = {
-            "galaxy_score":     latest.get("galaxy_score"),
-            "alt_rank":         latest.get("alt_rank"),
-            "sentiment":        latest.get("sentiment"),
-            "interactions_24h": latest.get("interactions_24h") or latest.get("interactions"),
-            "social_dominance": latest.get("social_dominance"),
+            "galaxy_score":        latest.get("galaxy_score"),
+            "alt_rank":            latest.get("alt_rank"),
+            "sentiment":           latest.get("sentiment"),
+            # API field is `interactions`; older code paths may still read `interactions_24h`.
+            "interactions_24h":    latest.get("interactions_24h") or latest.get("interactions"),
+            "interactions":        latest.get("interactions"),
+            "social_dominance":    latest.get("social_dominance"),
+            "contributors_active": latest.get("contributors_active"),
+            "posts_active":        latest.get("posts_active"),
+            "posts_created":       latest.get("posts_created"),
+            "spam":                latest.get("spam"),
         }
         dom = raw["social_dominance"]
         summary = (
