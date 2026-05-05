@@ -115,6 +115,32 @@ CREATE TABLE IF NOT EXISTS social_history (
 );
 CREATE INDEX IF NOT EXISTS idx_social_history_token_date ON social_history (token, date DESC);
 
+-- Social-justification paper-trade ledger (parallel to trade_log; isolated from main bot)
+CREATE TABLE IF NOT EXISTS sj_trades (
+    id                 BIGSERIAL PRIMARY KEY,
+    token              VARCHAR(20) NOT NULL,
+    entry_date         DATE        NOT NULL,
+    entry_price        DOUBLE PRECISION NOT NULL,
+    side               VARCHAR(10) NOT NULL DEFAULT 'long',  -- long only for now
+    status             VARCHAR(10) NOT NULL DEFAULT 'open',  -- open | closed
+    entry_z            DOUBLE PRECISION NOT NULL,            -- social_dominance z-score at entry
+    entry_prior_r7     DOUBLE PRECISION,                     -- prior 7d return at entry (for setup classification)
+    planned_exit_date  DATE        NOT NULL,                 -- entry_date + 7
+    exit_date          DATE,
+    exit_price         DOUBLE PRECISION,
+    pnl_pct            DOUBLE PRECISION,
+    notes              TEXT,
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (token, entry_date)
+);
+CREATE INDEX IF NOT EXISTS idx_sj_trades_status ON sj_trades (status);
+CREATE INDEX IF NOT EXISTS idx_sj_trades_token  ON sj_trades (token, entry_date DESC);
+
 -- Migrations for existing databases (safe to re-run: ADD COLUMN IF NOT EXISTS)
-ALTER TABLE system_state  ADD COLUMN IF NOT EXISTS run_starting_capital NUMERIC(12,4);
-ALTER TABLE decision_log  ADD COLUMN IF NOT EXISTS cache_read_tokens INTEGER;
+ALTER TABLE system_state    ADD COLUMN IF NOT EXISTS run_starting_capital NUMERIC(12,4);
+ALTER TABLE decision_log    ADD COLUMN IF NOT EXISTS cache_read_tokens INTEGER;
+ALTER TABLE social_history  ADD COLUMN IF NOT EXISTS interactions         DOUBLE PRECISION;
+ALTER TABLE social_history  ADD COLUMN IF NOT EXISTS contributors_active  DOUBLE PRECISION;
+ALTER TABLE social_history  ADD COLUMN IF NOT EXISTS posts_active         DOUBLE PRECISION;
+ALTER TABLE social_history  ADD COLUMN IF NOT EXISTS posts_created        DOUBLE PRECISION;
+ALTER TABLE social_history  ADD COLUMN IF NOT EXISTS spam                 DOUBLE PRECISION;
