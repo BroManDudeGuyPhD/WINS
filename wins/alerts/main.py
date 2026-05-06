@@ -358,6 +358,12 @@ def _register_commands(bot: WINSBot) -> None:
             )
             return
 
+        # Fetch live prices for open positions to compute unrealized P&L
+        live_prices: dict[str, float] = {}
+        if position_rows:
+            tokens = [r["token"] for r in position_rows]
+            live_prices = await _fetch_live_prices(tokens)
+
         embeds: list[discord.Embed] = []
 
         # ── Embed 1: System state ─────────────────────────────────────────────
@@ -375,6 +381,16 @@ def _register_commands(bot: WINSBot) -> None:
             pnl_pct = (pnl / start_cap * 100) if start_cap else 0
             pnl_str = f"{'+' if pnl >= 0 else ''}{pnl:.2f} ({pnl_pct:+.1f}%)"
 
+            # Compute unrealized P&L across open positions
+            total_unrealized = 0.0
+            all_priced = bool(position_rows)
+            for r in position_rows:
+                current = live_prices.get(r["token"])
+                if current is not None:
+                    total_unrealized += (current - float(r["entry_price"])) * float(r["qty"])
+                else:
+                    all_priced = False
+
             color   = _RED if paused else (_GREEN if pnl >= 0 else _RED)
             status_line = "🛑 **PAUSED**" if paused else "✅ Running"
 
@@ -389,6 +405,13 @@ def _register_commands(bot: WINSBot) -> None:
             state_embed.add_field(name="Phase",          value=f"`{phase}`",         inline=True)
 
             if position_rows:
+                if all_priced:
+                    sign = "+" if total_unrealized >= 0 else ""
+                    unreal_str = f"`{sign}{total_unrealized:.2f} USD`"
+                else:
+                    sign = "+" if total_unrealized >= 0 else ""
+                    unreal_str = f"`{sign}{total_unrealized:.2f} USD` *(partial)*"
+                state_embed.add_field(name="Unrealized P&L", value=unreal_str, inline=True)
                 tokens_str = "  ".join(r["token"] for r in position_rows)
                 state_embed.add_field(name="Positions", value=f"`{tokens_str}`", inline=True)
 
