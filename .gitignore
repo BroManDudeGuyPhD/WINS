@@ -19,3 +19,6 @@ DOCS/NEXTSTEPS.md
 DOCS/SELF_LEARNING_PROMPT.md
 DOCS/LEARNING_SYSTEM.md
 DOCS/social-reliability.md
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+.claude/settings.json
