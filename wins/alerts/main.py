@@ -529,6 +529,111 @@ def _register_commands(bot: WINSBot) -> None:
 
         await interaction.followup.send(embeds=embeds, ephemeral=True)
 
+    @bot.tree.command(name="benchmark", description="Open position returns vs BTC since entry (alpha check)")
+    async def benchmark(interaction: discord.Interaction) -> None:
+        if bot._owner_id and interaction.user.id != bot._owner_id:
+            await interaction.response.send_message(
+                "⛔ You are not authorised to control WINS.", ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        if not bot._pool:
+            await interaction.followup.send(
+                embed=discord.Embed(title="❌ Database unavailable", color=_RED),
+                ephemeral=True,
+            )
+            return
+
+        try:
+            rows = await bot._pool.fetch(
+                """SELECT token, qty, entry_price, btc_price_at_entry, ts_open
+                     FROM trade_log
+                    WHERE ts_close IS NULL AND side = 'buy'
+                 ORDER BY ts_open ASC"""
+            )
+        except Exception as exc:
+            log.warning(f"/benchmark DB query failed: {exc}")
+            await interaction.followup.send(
+                embed=discord.Embed(title="❌ DB query failed", description=str(exc), color=_RED),
+                ephemeral=True,
+            )
+            return
+
+        if not rows:
+            await interaction.followup.send(
+                embed=discord.Embed(
+                    title="📐 Benchmark",
+                    description="No open positions.",
+                    color=_BLUE,
+                ),
+                ephemeral=True,
+            )
+            return
+
+        tokens = list({r["token"] for r in rows})
+        if "BTC" not in tokens:
+            tokens.append("BTC")
+        prices = await _fetch_live_prices(tokens)
+        btc_now = prices.get("BTC")
+
+        fields: list[dict] = []
+        net_alpha = 0.0
+        any_alpha = False
+
+        for r in rows:
+            token  = r["token"]
+            entry  = float(r["entry_price"])
+            current = prices.get(token)
+            btc_entry_raw = r["btc_price_at_entry"]
+            btc_entry = float(btc_entry_raw) if btc_entry_raw else None
+
+            token_pct: float | None = (current - entry) / entry * 100 if (current and entry > 0) else None
+            btc_pct:   float | None = (btc_now - btc_entry) / btc_entry * 100 if (btc_now and btc_entry and btc_entry > 0) else None
+            alpha:     float | None = token_pct - btc_pct if (token_pct is not None and btc_pct is not None) else None
+
+            now = datetime.now(timezone.utc)
+            ts_open = r["ts_open"]
+            if ts_open.tzinfo is None:
+                ts_open = ts_open.replace(tzinfo=timezone.utc)
+            hold_h = int((now - ts_open).total_seconds() / 3600)
+            hold_str = f"{hold_h}h" if hold_h < 48 else f"{hold_h // 24}d"
+
+            price_str   = f"`${entry:.4f}` → `${current:.4f}`" if current else f"`${entry:.4f}` → `—`"
+            token_str   = f"`{token_pct:+.2f}%`" if token_pct is not None else "`n/a`"
+            btc_str     = f"`{btc_pct:+.2f}%`" if btc_pct is not None else "`n/a`"
+            alpha_str   = f"`{alpha:+.2f}%`" if alpha is not None else "`n/a`"
+            alpha_icon  = "🟢" if (alpha is not None and alpha >= 0) else ("🔴" if alpha is not None else "⚪")
+
+            if alpha is not None:
+                net_alpha += alpha
+                any_alpha  = True
+
+            fields.append({
+                "name":  f"{alpha_icon} **{token}** — held {hold_str}",
+                "value": (
+                    f"{price_str}\n"
+                    f"Position: {token_str}  BTC: {btc_str}  **Alpha: {alpha_str}**"
+                ),
+                "inline": False,
+            })
+
+        btc_line = f"BTC now `${btc_now:,.2f}`" if btc_now else "BTC price unavailable"
+        if any_alpha:
+            alpha_sign = "+" if net_alpha >= 0 else ""
+            desc = f"Net alpha across positions: **`{alpha_sign}{net_alpha:.2f}%`** · {btc_line}"
+        else:
+            desc = btc_line
+
+        color = _GREEN if (any_alpha and net_alpha >= 0) else (_RED if any_alpha else _BLUE)
+        embed = discord.Embed(title="📐 Open Position Alpha vs BTC", description=desc, color=color)
+        for f in fields:
+            embed.add_field(name=f["name"], value=f["value"], inline=False)
+        embed.set_footer(text="Alpha = position return − BTC return since entry")
+
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
     @bot.tree.command(name="braincheck", description="Validate first-run API health: cache hits, token counts, decision quality")
     async def braincheck(interaction: discord.Interaction) -> None:
         if bot._owner_id and interaction.user.id != bot._owner_id:
