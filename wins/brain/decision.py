@@ -4,8 +4,6 @@ Core Claude decision engine.
 Implements the tiered Haiku → Sonnet → Opus model approach from WINS.md.
 Set USE_MOCK_BRAIN=true to run without an Anthropic API key.
 """
-import json
-import re
 from decimal import Decimal
 
 from wins.shared.config import (
@@ -18,6 +16,37 @@ from wins.brain.prompts import SYSTEM_PROMPT, build_user_message
 from wins.brain.mock_decision import mock_decision
 
 log = get_logger("brain")
+
+# Tool schema — forces Claude to emit structured output via tool_use block.
+# tool_choice={"type": "any"} means Claude must call this tool; it cannot
+# respond with free text, so markdown fences and preamble are impossible.
+DECISION_TOOL = {
+    "name": "submit_decision",
+    "description": "Submit the structured trading decision for this signal bundle.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "action":             {"type": "string", "enum": ["buy", "sell", "hold"]},
+            "token":              {"type": "string"},
+            "confidence":         {"type": "number", "minimum": 0.0, "maximum": 1.0},
+            "signal_type":        {"type": "string", "enum": ["catalyst", "sentiment", "momentum", "macro"]},
+            "entry_price":        {"type": "number", "minimum": 0},
+            "stop_loss_price":    {"type": "number", "minimum": 0},
+            "target_price":       {"type": "number", "minimum": 0},
+            "estimated_move_pct": {"type": "integer"},
+            "time_horizon":       {"type": "string", "enum": ["hours", "days", "week"]},
+            "reasoning":          {"type": "string"},
+            "macro_gate":         {"type": "string", "enum": ["pass", "block"]},
+            "risk_flag":          {"type": "string", "enum": ["none", "caution", "high"]},
+        },
+        "required": [
+            "action", "token", "confidence", "signal_type",
+            "entry_price", "stop_loss_price", "target_price",
+            "estimated_move_pct", "time_horizon", "reasoning",
+            "macro_gate", "risk_flag",
+        ],
+    },
+}
 
 # Lazy-init — avoids import-time crash when no API key is set
 _client = None
@@ -81,7 +110,7 @@ def _claude_decision(
     account_state: dict | None = None,
     as_of: str | None = None,
 ) -> BrainResult:
-    """Send a SignalBundle to Claude and parse the structured JSON response."""
+    """Send a SignalBundle to Claude and parse the structured tool_use response."""
     import anthropic
 
     model = OPUS_MODEL if use_opus else SONNET_MODEL
@@ -102,30 +131,29 @@ def _claude_decision(
                 {
                     "type": "text",
                     "text": SYSTEM_PROMPT,
-                    "cache_control": {"type": "ephemeral"},   # prompt caching
+                    "cache_control": {"type": "ephemeral"},
                 }
             ],
+            tools=[DECISION_TOOL],
+            tool_choice={"type": "any"},   # Claude must call submit_decision; no free text possible
             messages=[{"role": "user", "content": user_message}],
         )
     except anthropic.APIError as exc:
         log.error(f"Anthropic API error for {bundle.token}: {exc}")
         return None, model, 0, 0, 0
 
-    raw_text = response.content[0].text.strip()
-    # Strip markdown code fences Claude sometimes wraps around JSON
-    raw_text = re.sub(r'^```(?:json)?\s*\n?', '', raw_text)
-    raw_text = re.sub(r'\n?```\s*$', '', raw_text).strip()
-
-    try:
-        raw_json = json.loads(raw_text)
-    except json.JSONDecodeError:
-        log.error(f"Claude returned non-JSON for {bundle.token}: {raw_text[:500]}")
+    tool_block = next(
+        (b for b in response.content if b.type == "tool_use"),
+        None,
+    )
+    if tool_block is None:
+        log.error(f"Claude returned no tool_use block for {bundle.token}: {response.content}")
         return None, model, 0, 0, 0
 
     try:
-        decision = DecisionOutput(**raw_json)
+        decision = DecisionOutput(**tool_block.input)
     except Exception as exc:
-        log.error(f"DecisionOutput validation failed for {bundle.token}: {exc} | raw={raw_json}")
+        log.error(f"DecisionOutput validation failed for {bundle.token}: {exc} | raw={tool_block.input}")
         return None, model, 0, 0, 0
 
     usage = response.usage
