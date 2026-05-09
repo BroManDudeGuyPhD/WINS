@@ -5,6 +5,7 @@ Implements the tiered Haiku → Sonnet → Opus model approach from WINS.md.
 Set USE_MOCK_BRAIN=true to run without an Anthropic API key.
 """
 import json
+import re
 from decimal import Decimal
 
 from wins.shared.config import (
@@ -111,6 +112,9 @@ def _claude_decision(
         return None, model, 0, 0, 0
 
     raw_text = response.content[0].text.strip()
+    # Strip markdown code fences Claude sometimes wraps around JSON
+    raw_text = re.sub(r'^```(?:json)?\s*\n?', '', raw_text)
+    raw_text = re.sub(r'\n?```\s*$', '', raw_text).strip()
 
     try:
         raw_json = json.loads(raw_text)
