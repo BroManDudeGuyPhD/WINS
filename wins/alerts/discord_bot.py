@@ -154,18 +154,68 @@ async def alert_trade_closed(
     pnl_pct: float,
     reason: str,
     mode: str,
+    btc_benchmark_pct: float | None = None,
+    btc_alpha_pct: float | None = None,
 ) -> None:
     won = pnl_usd >= 0
+    fields = [
+        {"name": "P&L",    "value": f"`{'+'if pnl_usd>=0 else ''}{pnl_usd:.2f} USD`", "inline": True},
+        {"name": "Return", "value": f"`{pnl_pct:+.2f}%`",                              "inline": True},
+        {"name": "Reason", "value": f"`{reason}`",                                      "inline": True},
+    ]
+    if btc_benchmark_pct is not None and btc_alpha_pct is not None:
+        alpha_sign = "+" if btc_alpha_pct >= 0 else ""
+        fields.append({
+            "name":   "vs BTC",
+            "value":  f"BTC: `{btc_benchmark_pct:+.2f}%`  Alpha: `{alpha_sign}{btc_alpha_pct:.2f}%`",
+            "inline": False,
+        })
     await _send({
         "embeds": [{
             "title": f"{'✅' if won else '❌'} CLOSED {token}  [{mode.upper()}]",
             "color": _GREEN if won else _RED,
-            "fields": [
-                {"name": "P&L",    "value": f"`{'+'if pnl_usd>=0 else ''}{pnl_usd:.2f} USD`", "inline": True},
-                {"name": "Return", "value": f"`{pnl_pct:+.2f}%`",                              "inline": True},
-                {"name": "Reason", "value": f"`{reason}`",                                      "inline": True},
-            ],
+            "fields": fields,
             "footer": {"text": "WINS · paper trade" if mode == "paper" else "WINS · LIVE"},
+        }]
+    })
+
+
+async def alert_benchmark_report(
+    positions: list[dict],
+    btc_price_now: float | None,
+) -> None:
+    """Open-position alpha snapshot: token return vs BTC return since entry."""
+    if not positions:
+        await _send({"content": "No open positions to benchmark."})
+        return
+
+    fields = []
+    for p in positions:
+        token      = p["token"]
+        token_pct  = p.get("token_pct")
+        btc_pct    = p.get("btc_pct")
+        alpha      = p.get("alpha_pct")
+        entry      = p.get("entry")
+        current    = p.get("current")
+
+        pct_str   = f"`{token_pct:+.2f}%`" if token_pct is not None else "`n/a`"
+        btc_str   = f"`{btc_pct:+.2f}%`" if btc_pct is not None else "`n/a`"
+        alpha_str = f"`{alpha:+.2f}%`" if alpha is not None else "`n/a`"
+        price_str = f"${entry:.4f} → ${current:.4f}" if entry and current else ""
+
+        fields.append({
+            "name":   token,
+            "value":  f"{price_str}\nPos: {pct_str}  BTC: {btc_str}  **Alpha: {alpha_str}**",
+            "inline": False,
+        })
+
+    btc_footer = f"BTC now ${btc_price_now:,.2f}" if btc_price_now else ""
+    await _send({
+        "embeds": [{
+            "title":  "📐 Open Position Alpha vs BTC",
+            "color":  _BLUE,
+            "fields": fields,
+            "footer": {"text": f"WINS benchmark · {btc_footer}"},
         }]
     })
 

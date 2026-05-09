@@ -20,31 +20,34 @@ log = get_logger("paper_portfolio")
 
 @dataclass
 class OpenPosition:
-    trade_id:        int
-    token:           str
-    qty:             Decimal
-    entry_price:     Decimal
-    stop_loss_price: Decimal
-    target_price:    Decimal
-    cost_usd:        Decimal       # qty × entry_price
+    trade_id:          int
+    token:             str
+    qty:               Decimal
+    entry_price:       Decimal
+    stop_loss_price:   Decimal
+    target_price:      Decimal
+    cost_usd:          Decimal       # qty × entry_price
+    btc_price_at_entry: Decimal | None = None
 
 
 async def load_open_positions(pool: asyncpg.Pool) -> list[OpenPosition]:
     rows = await pool.fetch(
-        """SELECT id, token, qty, entry_price, stop_loss_price, target_price
+        """SELECT id, token, qty, entry_price, stop_loss_price, target_price,
+                  btc_price_at_entry
              FROM trade_log
             WHERE ts_close IS NULL AND side = 'buy'
          ORDER BY ts_open ASC"""
     )
     return [
         OpenPosition(
-            trade_id        = r["id"],
-            token           = r["token"],
-            qty             = Decimal(str(r["qty"])),
-            entry_price     = Decimal(str(r["entry_price"])),
-            stop_loss_price = Decimal(str(r["stop_loss_price"])),
-            target_price    = Decimal(str(r["target_price"])),
-            cost_usd        = Decimal(str(r["qty"])) * Decimal(str(r["entry_price"])),
+            trade_id           = r["id"],
+            token              = r["token"],
+            qty                = Decimal(str(r["qty"])),
+            entry_price        = Decimal(str(r["entry_price"])),
+            stop_loss_price    = Decimal(str(r["stop_loss_price"])),
+            target_price       = Decimal(str(r["target_price"])),
+            cost_usd           = Decimal(str(r["qty"])) * Decimal(str(r["entry_price"])),
+            btc_price_at_entry = Decimal(str(r["btc_price_at_entry"])) if r["btc_price_at_entry"] else None,
         )
         for r in rows
     ]
@@ -53,6 +56,7 @@ async def load_open_positions(pool: asyncpg.Pool) -> list[OpenPosition]:
 async def check_and_close_positions(
     pool:           asyncpg.Pool,
     current_prices: dict[str, Decimal],
+    btc_price:      Decimal | None = None,
 ) -> list[dict]:
     """
     Compare open positions against current prices.
@@ -83,19 +87,29 @@ async def check_and_close_positions(
             pnl_usd = (exit_price - pos.entry_price) * pos.qty
             pnl_pct = ((exit_price - pos.entry_price) / pos.entry_price) * Decimal("100")
 
+            btc_benchmark_pct: float | None = None
+            btc_alpha_pct: float | None = None
+            if btc_price and pos.btc_price_at_entry and pos.btc_price_at_entry > 0:
+                btc_benchmark_pct = float((btc_price - pos.btc_price_at_entry) / pos.btc_price_at_entry * 100)
+                btc_alpha_pct = float(pnl_pct) - btc_benchmark_pct
+
             await pool.execute(
                 """UPDATE trade_log
-                      SET ts_close    = $1,
-                          exit_price  = $2,
-                          pnl_usd     = $3,
-                          pnl_pct     = $4,
-                          exit_reason = $5
-                    WHERE id = $6""",
+                      SET ts_close          = $1,
+                          exit_price        = $2,
+                          pnl_usd           = $3,
+                          pnl_pct           = $4,
+                          exit_reason       = $5,
+                          btc_benchmark_pct = $6,
+                          btc_alpha_pct     = $7
+                    WHERE id = $8""",
                 datetime.now(timezone.utc),
                 float(exit_price),
                 float(pnl_usd),
                 float(pnl_pct),
                 exit_reason,
+                btc_benchmark_pct,
+                btc_alpha_pct,
                 pos.trade_id,
             )
 
@@ -103,16 +117,19 @@ async def check_and_close_positions(
                 f"[PAPER CLOSE] {pos.token} via {exit_reason}: "
                 f"entry=${pos.entry_price} exit=${exit_price} "
                 f"PnL=${pnl_usd:.2f} ({pnl_pct:.2f}%)"
+                + (f" | BTC benchmark={btc_benchmark_pct:.2f}% alpha={btc_alpha_pct:.2f}%" if btc_alpha_pct is not None else "")
             )
 
             closed.append({
-                "token":       pos.token,
-                "exit_reason": exit_reason,
-                "exit_price":  float(exit_price),
-                "pnl_usd":     float(pnl_usd),
-                "pnl_pct":     float(pnl_pct),
-                "qty":         float(pos.qty),
-                "cost_usd":    float(pos.cost_usd),
+                "token":             pos.token,
+                "exit_reason":       exit_reason,
+                "exit_price":        float(exit_price),
+                "pnl_usd":           float(pnl_usd),
+                "pnl_pct":           float(pnl_pct),
+                "qty":               float(pos.qty),
+                "cost_usd":          float(pos.cost_usd),
+                "btc_benchmark_pct": btc_benchmark_pct,
+                "btc_alpha_pct":     btc_alpha_pct,
             })
 
     return closed

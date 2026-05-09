@@ -144,3 +144,8 @@ ALTER TABLE social_history  ADD COLUMN IF NOT EXISTS contributors_active  DOUBLE
 ALTER TABLE social_history  ADD COLUMN IF NOT EXISTS posts_active         DOUBLE PRECISION;
 ALTER TABLE social_history  ADD COLUMN IF NOT EXISTS posts_created        DOUBLE PRECISION;
 ALTER TABLE social_history  ADD COLUMN IF NOT EXISTS spam                 DOUBLE PRECISION;
+
+-- BTC benchmark columns on trade_log (tracks alpha vs holding BTC over same period)
+ALTER TABLE trade_log ADD COLUMN IF NOT EXISTS btc_price_at_entry NUMERIC(20,8);
+ALTER TABLE trade_log ADD COLUMN IF NOT EXISTS btc_benchmark_pct  NUMERIC(8,4);
+ALTER TABLE trade_log ADD COLUMN IF NOT EXISTS btc_alpha_pct      NUMERIC(8,4);

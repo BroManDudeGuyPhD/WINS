@@ -128,7 +128,7 @@ async def run_cycle() -> None:
     # context for Claude so it can reason about discretionary exits.
     open_position_rows = await pool.fetch(
         """SELECT id, token, qty, entry_price, stop_loss_price, target_price,
-                  ts_open, exchange_order_id
+                  ts_open, exchange_order_id, btc_price_at_entry
              FROM trade_log
             WHERE ts_close IS NULL AND side = 'buy'"""
     )
@@ -156,15 +156,20 @@ async def run_cycle() -> None:
     # Always available — used both for paper SL/TP checks and for marking
     # discretionary sells to market.
     current_prices = {b.token: b.market.price_usd for b in bundles}
+    btc_price_now  = bundles[0].macro.price_usd if bundles else None
 
     # ── Step 1: Check open paper positions for SL/TP hits ─────────────────────
     if TRADE_MODE == "paper":
-        closed = await check_and_close_positions(pool, current_prices)
+        closed = await check_and_close_positions(pool, current_prices, btc_price=btc_price_now)
         for c in closed:
             capital        += Decimal(str(c["cost_usd"])) + Decimal(str(c["pnl_usd"]))
             open_positions  = max(0, open_positions - 1)
             held_tokens.discard(c["token"])
-            await alert_trade_closed(c["token"], c["pnl_usd"], c["pnl_pct"], c["exit_reason"], TRADE_MODE)
+            await alert_trade_closed(
+                c["token"], c["pnl_usd"], c["pnl_pct"], c["exit_reason"], TRADE_MODE,
+                btc_benchmark_pct=c.get("btc_benchmark_pct"),
+                btc_alpha_pct=c.get("btc_alpha_pct"),
+            )
 
     executor = get_executor()
 
@@ -258,6 +263,15 @@ async def run_cycle() -> None:
         pnl_usd     = (cur_dec - entry_price) * qty
         pnl_pct     = ((cur_dec - entry_price) / entry_price) * Decimal("100") if entry_price > 0 else Decimal("0")
 
+        btc_entry_raw = pos_row["btc_price_at_entry"]
+        btc_benchmark_pct: float | None = None
+        btc_alpha_pct: float | None = None
+        if btc_price_now and btc_entry_raw:
+            btc_entry = Decimal(str(btc_entry_raw))
+            if btc_entry > 0:
+                btc_benchmark_pct = float((btc_price_now - btc_entry) / btc_entry * 100)
+                btc_alpha_pct = float(pnl_pct) - btc_benchmark_pct
+
         sell_kwargs = {"token": bundle.token, "qty": qty, "current_price": cur_dec, "reason": "claude_sell"}
         if TRADE_MODE == "live":
             sell_kwargs["sl_order_id"] = pos_row["exchange_order_id"]
@@ -271,24 +285,29 @@ async def run_cycle() -> None:
         )
         await pool.execute(
             """UPDATE trade_log
-                  SET ts_close    = NOW(),
-                      exit_price  = $1,
-                      pnl_usd     = $2,
-                      pnl_pct     = $3,
-                      exit_reason = $4,
-                      notes       = $5
-                WHERE id = $6""",
+                  SET ts_close          = NOW(),
+                      exit_price        = $1,
+                      pnl_usd           = $2,
+                      pnl_pct           = $3,
+                      exit_reason       = $4,
+                      notes             = $5,
+                      btc_benchmark_pct = $6,
+                      btc_alpha_pct     = $7
+                WHERE id = $8""",
             float(fill["fill_price"]),
             float(pnl_usd),
             float(pnl_pct),
             f"claude_sell:{decision.signal_type.value}",
             sell_notes,
+            btc_benchmark_pct,
+            btc_alpha_pct,
             pos_row["id"],
         )
         log.info(
             f"[CLAUDE SELL] {bundle.token}: signal={decision.signal_type.value} "
-            f"confidence={decision.confidence} pnl=${pnl_usd:.2f} ({pnl_pct:.2f}%) "
-            f"| {decision.reasoning[:200]}"
+            f"confidence={decision.confidence} pnl=${pnl_usd:.2f} ({pnl_pct:.2f}%)"
+            + (f" | BTC benchmark={btc_benchmark_pct:.2f}% alpha={btc_alpha_pct:.2f}%" if btc_alpha_pct is not None else "")
+            + f" | {decision.reasoning[:200]}"
         )
 
         capital            += cost_usd + pnl_usd
@@ -300,6 +319,8 @@ async def run_cycle() -> None:
         await _persist_state(pool, capital, open_positions)
         await alert_trade_closed(
             bundle.token, float(pnl_usd), float(pnl_pct), "claude_sell", TRADE_MODE,
+            btc_benchmark_pct=btc_benchmark_pct,
+            btc_alpha_pct=btc_alpha_pct,
         )
 
     # ── Step 2c: Execute buys, highest confidence first ───────────────────────
@@ -336,13 +357,14 @@ async def run_cycle() -> None:
         await pool.execute(
             """INSERT INTO trade_log
                  (decision_id, token, trade_mode, side, qty, entry_price,
-                  stop_loss_price, target_price, exchange_order_id)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)""",
+                  stop_loss_price, target_price, exchange_order_id, btc_price_at_entry)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)""",
             decision_id,
             fill["token"], TRADE_MODE, "buy",
             Decimal(str(fill["qty"])), Decimal(str(fill["fill_price"])),
             decision.stop_loss_price, decision.target_price,
             sl_order_id,
+            float(bundle.macro.price_usd),
         )
 
         open_positions     += 1
