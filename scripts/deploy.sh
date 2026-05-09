@@ -22,53 +22,8 @@ docker compose build
 docker compose up -d
 
 echo "--- Running DB migrations ---"
-docker compose exec -T wins-db psql -U wins -d wins -f - <<'SQL'
-CREATE TABLE IF NOT EXISTS social_history (
-    id               BIGSERIAL PRIMARY KEY,
-    ts               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    token            VARCHAR(20) NOT NULL,
-    date             DATE NOT NULL,
-    social_dominance DOUBLE PRECISION,
-    interactions_24h DOUBLE PRECISION,
-    sentiment        DOUBLE PRECISION,
-    galaxy_score     DOUBLE PRECISION,
-    alt_rank         INTEGER,
-    price_open       DOUBLE PRECISION,
-    price_close      DOUBLE PRECISION,
-    price_high       DOUBLE PRECISION,
-    price_low        DOUBLE PRECISION,
-    volume_24h       DOUBLE PRECISION,
-    UNIQUE (token, date)
-);
-CREATE INDEX IF NOT EXISTS idx_social_history_token_date ON social_history (token, date DESC);
-ALTER TABLE social_history ADD COLUMN IF NOT EXISTS interactions         DOUBLE PRECISION;
-ALTER TABLE social_history ADD COLUMN IF NOT EXISTS contributors_active  DOUBLE PRECISION;
-ALTER TABLE social_history ADD COLUMN IF NOT EXISTS posts_active         DOUBLE PRECISION;
-ALTER TABLE social_history ADD COLUMN IF NOT EXISTS posts_created        DOUBLE PRECISION;
-ALTER TABLE social_history ADD COLUMN IF NOT EXISTS spam                 DOUBLE PRECISION;
-
-CREATE TABLE IF NOT EXISTS sj_trades (
-    id                 BIGSERIAL PRIMARY KEY,
-    token              VARCHAR(20) NOT NULL,
-    entry_date         DATE        NOT NULL,
-    entry_price        DOUBLE PRECISION NOT NULL,
-    side               VARCHAR(10) NOT NULL DEFAULT 'long',
-    status             VARCHAR(10) NOT NULL DEFAULT 'open',
-    entry_z            DOUBLE PRECISION NOT NULL,
-    entry_prior_r7     DOUBLE PRECISION,
-    planned_exit_date  DATE        NOT NULL,
-    exit_date          DATE,
-    exit_price         DOUBLE PRECISION,
-    pnl_pct            DOUBLE PRECISION,
-    notes              TEXT,
-    created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (token, entry_date)
-);
-CREATE INDEX IF NOT EXISTS idx_sj_trades_status ON sj_trades (status);
-CREATE INDEX IF NOT EXISTS idx_sj_trades_token  ON sj_trades (token, entry_date DESC);
-
-SELECT COUNT(*) AS existing_rows FROM social_history;
-SQL
+docker compose exec -T wins-db psql -U wins -d wins \
+  -f /docker-entrypoint-initdb.d/init.sql
 echo "✓ Migrations complete"
 
 docker compose ps
