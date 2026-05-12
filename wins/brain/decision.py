@@ -101,19 +101,27 @@ def make_decision(
         log.debug(f"[MOCK MODE] Generating mock decision for {bundle.token}")
         return mock_decision(bundle), "mock", 0, 0, 0
 
-    return _claude_decision(bundle, use_opus=False, account_state=account_state, as_of=as_of)
+    # Haiku pre-filter: cheap first pass. Only call Sonnet if Haiku signals non-hold.
+    haiku_result = _claude_decision(bundle, model=HAIKU_MODEL, account_state=account_state, as_of=as_of)
+    haiku_decision = haiku_result[0]
+    if haiku_decision is None or haiku_decision.action.value == "hold":
+        return haiku_result
+
+    log.info(f"Haiku flagged {bundle.token} as {haiku_decision.action.value} — escalating to Sonnet.")
+    return _claude_decision(bundle, model=SONNET_MODEL, account_state=account_state, as_of=as_of)
 
 
 def _claude_decision(
     bundle: SignalBundle,
-    use_opus: bool = False,
+    model: str | None = None,
     account_state: dict | None = None,
     as_of: str | None = None,
 ) -> BrainResult:
     """Send a SignalBundle to Claude and parse the structured tool_use response."""
     import anthropic
 
-    model = OPUS_MODEL if use_opus else SONNET_MODEL
+    if model is None:
+        model = SONNET_MODEL
     client = _get_client()
 
     # Pre-compress noisy text fields with Haiku
@@ -172,7 +180,7 @@ def _claude_decision(
     # Threshold raised to 0.92 (from 0.85) and gated on signal_type=catalyst
     # to avoid runaway Opus spend on routine momentum calls
     if (
-        not use_opus
+        model != OPUS_MODEL
         and decision.confidence >= Decimal("0.92")
         and decision.signal_type.value == "catalyst"
     ):
@@ -180,6 +188,6 @@ def _claude_decision(
             f"High-confidence catalyst ({decision.confidence}) on {bundle.token} "
             "— escalating to Opus."
         )
-        return _claude_decision(bundle, use_opus=True, account_state=account_state, as_of=as_of)
+        return _claude_decision(bundle, model=OPUS_MODEL, account_state=account_state, as_of=as_of)
 
     return decision, model, input_tokens, output_tokens, cache_read_tokens
