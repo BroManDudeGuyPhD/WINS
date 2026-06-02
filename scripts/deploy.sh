@@ -22,8 +22,12 @@ docker compose build
 docker compose up -d
 
 echo "--- Running DB migrations ---"
-docker compose exec -T wins-db psql -U wins -d wins \
-  -f /docker-entrypoint-initdb.d/init.sql
+# Pipe the freshly-pulled host file via stdin rather than reading the container's
+# copy. init.sql is a single-file bind mount, and replacing the file on the host
+# (git pull) does not update the inode the long-lived wins-db container sees — so
+# `-f /docker-entrypoint-initdb.d/init.sql` would run a stale schema. stdin always
+# uses the current host file.
+docker compose exec -T wins-db psql -U wins -d wins -v ON_ERROR_STOP=1 < wins/db/init.sql
 echo "✓ Migrations complete"
 
 docker compose ps
