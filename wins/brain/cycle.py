@@ -16,12 +16,14 @@ from wins.shared.config import (
 from wins.shared.db import get_pool
 from wins.shared.logger import get_logger
 from wins.shared.models import Action, MacroGate
-from wins.ingestion.collector import collect_signal_bundles, apply_social_filter
+from wins.ingestion.collector import (
+    collect_signal_bundles, collect_current_prices, apply_social_filter,
+)
 from wins.brain.calibration import get_calibration_multipliers
 from wins.brain.decision import make_decision
 from wins.execution.risk import validate_decision, calculate_position_size
 from wins.execution.executor import get_executor
-from wins.execution.paper_portfolio import check_and_close_positions
+from wins.execution.paper_portfolio import check_and_close_positions, load_open_positions
 from wins.alerts.discord_bot import (
     alert_trade_opened, alert_trade_closed, alert_kill_switch, alert_system_health,
 )
@@ -112,6 +114,72 @@ async def _persist_state(
     )
 
 
+async def _apply_closures(
+    closed: list[dict],
+    capital: Decimal,
+    open_positions: int,
+    held_tokens: set[str],
+) -> tuple[Decimal, int]:
+    """Fold a batch of closed paper positions back into capital/open-count and
+    alert on each. Shared by the decision cycle and the guardian cycle."""
+    for c in closed:
+        capital        += Decimal(str(c["cost_usd"])) + Decimal(str(c["pnl_usd"]))
+        open_positions  = max(0, open_positions - 1)
+        held_tokens.discard(c["token"])
+        await alert_trade_closed(
+            c["token"], c["pnl_usd"], c["pnl_pct"], c["exit_reason"], TRADE_MODE,
+            btc_benchmark_pct=c.get("btc_benchmark_pct"),
+            btc_alpha_pct=c.get("btc_alpha_pct"),
+        )
+    return capital, open_positions
+
+
+async def run_guardian_cycle() -> None:
+    """Cheap, no-LLM cycle run between Claude decision cycles.
+
+    Enforces stop-loss / target / trailing-stop on open paper positions at high
+    frequency so gains are protected and losses capped without paying for an LLM
+    call every few minutes. Live exits are managed by exchange-side stop orders,
+    so this is paper-only.
+    """
+    if TRADE_MODE != "paper":
+        return
+    pool = await get_pool()
+    state = await _get_system_state(pool)
+    if state["system_paused"]:
+        return
+
+    positions = await load_open_positions(pool)
+    if not positions:
+        return
+
+    capital        = Decimal(str(state["capital_usd"]))
+    open_positions = state["open_positions"]
+    held_tokens    = {p.token for p in positions}
+
+    try:
+        current_prices, btc_price_now = await collect_current_prices(
+            [p.token for p in positions]
+        )
+    except Exception as exc:
+        log.warning(f"Guardian price fetch failed — skipping: {exc}")
+        return
+    if not current_prices:
+        log.warning("Guardian got no prices — skipping.")
+        return
+
+    closed = await check_and_close_positions(pool, current_prices, btc_price=btc_price_now)
+    if closed:
+        capital, open_positions = await _apply_closures(
+            closed, capital, open_positions, held_tokens
+        )
+        await _persist_state(pool, capital, open_positions)
+        log.info(
+            f"Guardian closed {len(closed)} position(s). "
+            f"Capital=${capital:.2f} Open positions={open_positions}"
+        )
+
+
 async def run_cycle() -> None:
     pool = await get_pool()
     state = await _get_system_state(pool)
@@ -161,15 +229,9 @@ async def run_cycle() -> None:
     # ── Step 1: Check open paper positions for SL/TP hits ─────────────────────
     if TRADE_MODE == "paper":
         closed = await check_and_close_positions(pool, current_prices, btc_price=btc_price_now)
-        for c in closed:
-            capital        += Decimal(str(c["cost_usd"])) + Decimal(str(c["pnl_usd"]))
-            open_positions  = max(0, open_positions - 1)
-            held_tokens.discard(c["token"])
-            await alert_trade_closed(
-                c["token"], c["pnl_usd"], c["pnl_pct"], c["exit_reason"], TRADE_MODE,
-                btc_benchmark_pct=c.get("btc_benchmark_pct"),
-                btc_alpha_pct=c.get("btc_alpha_pct"),
-            )
+        capital, open_positions = await _apply_closures(
+            closed, capital, open_positions, held_tokens
+        )
 
     executor = get_executor()
 
@@ -283,7 +345,9 @@ async def run_cycle() -> None:
             f"sell_decision_id={decision_id} "
             f"| {decision.reasoning}"
         )
-        await pool.execute(
+        # Atomic close — the guardian cycle may have closed this position via
+        # SL/TP/trailing in the same instant. Only account for it if we won.
+        status = await pool.execute(
             """UPDATE trade_log
                   SET ts_close          = NOW(),
                       exit_price        = $1,
@@ -293,7 +357,7 @@ async def run_cycle() -> None:
                       notes             = $5,
                       btc_benchmark_pct = $6,
                       btc_alpha_pct     = $7
-                WHERE id = $8""",
+                WHERE id = $8 AND ts_close IS NULL""",
             float(fill["fill_price"]),
             float(pnl_usd),
             float(pnl_pct),
@@ -303,6 +367,11 @@ async def run_cycle() -> None:
             btc_alpha_pct,
             pos_row["id"],
         )
+        if status == "UPDATE 0":
+            log.info(f"Claude sell for {bundle.token} skipped — already closed by guardian cycle.")
+            held_tokens.discard(bundle.token)
+            open_positions_by_token.pop(bundle.token, None)
+            continue
         log.info(
             f"[CLAUDE SELL] {bundle.token}: signal={decision.signal_type.value} "
             f"confidence={decision.confidence} pnl=${pnl_usd:.2f} ({pnl_pct:.2f}%)"

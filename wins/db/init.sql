@@ -149,3 +149,7 @@ ALTER TABLE social_history  ADD COLUMN IF NOT EXISTS spam                 DOUBLE
 ALTER TABLE trade_log ADD COLUMN IF NOT EXISTS btc_price_at_entry NUMERIC(20,8);
 ALTER TABLE trade_log ADD COLUMN IF NOT EXISTS btc_benchmark_pct  NUMERIC(8,4);
 ALTER TABLE trade_log ADD COLUMN IF NOT EXISTS btc_alpha_pct      NUMERIC(8,4);
+
+-- Trailing-stop high-water mark: highest price seen since entry, updated each
+-- guardian cycle. NULL until first observed price; trailing stop derives from it.
+ALTER TABLE trade_log ADD COLUMN IF NOT EXISTS high_water_price NUMERIC(20,8);

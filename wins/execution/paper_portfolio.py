@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 
 import asyncpg
 
+from wins.shared.config import TRAILING_STOP_PCT, TRAILING_ACTIVATION_PCT
 from wins.shared.logger import get_logger
 
 log = get_logger("paper_portfolio")
@@ -28,12 +29,13 @@ class OpenPosition:
     target_price:      Decimal
     cost_usd:          Decimal       # qty × entry_price
     btc_price_at_entry: Decimal | None = None
+    high_water_price:   Decimal | None = None
 
 
 async def load_open_positions(pool: asyncpg.Pool) -> list[OpenPosition]:
     rows = await pool.fetch(
         """SELECT id, token, qty, entry_price, stop_loss_price, target_price,
-                  btc_price_at_entry
+                  btc_price_at_entry, high_water_price
              FROM trade_log
             WHERE ts_close IS NULL AND side = 'buy'
          ORDER BY ts_open ASC"""
@@ -48,9 +50,25 @@ async def load_open_positions(pool: asyncpg.Pool) -> list[OpenPosition]:
             target_price       = Decimal(str(r["target_price"])),
             cost_usd           = Decimal(str(r["qty"])) * Decimal(str(r["entry_price"])),
             btc_price_at_entry = Decimal(str(r["btc_price_at_entry"])) if r["btc_price_at_entry"] else None,
+            high_water_price   = Decimal(str(r["high_water_price"])) if r["high_water_price"] else None,
         )
         for r in rows
     ]
+
+
+def _effective_stop(pos: OpenPosition, high_water: Decimal) -> tuple[Decimal, str]:
+    """Return (stop_price, reason). The trailing stop ratchets up from the
+    original stop once the position is far enough in profit, and never drops
+    below the original stop. reason is 'trailing_stop' when the trail is active
+    and above the original, else 'stop_loss'."""
+    stop, reason = pos.stop_loss_price, "stop_loss"
+    if TRAILING_STOP_PCT > 0:
+        activation_price = pos.entry_price * (Decimal("1") + TRAILING_ACTIVATION_PCT)
+        if high_water >= activation_price:
+            trail_stop = high_water * (Decimal("1") - TRAILING_STOP_PCT)
+            if trail_stop > stop:
+                stop, reason = trail_stop, "trailing_stop"
+    return stop, reason
 
 
 async def check_and_close_positions(
@@ -72,13 +90,25 @@ async def check_and_close_positions(
             log.warning(f"No current price for open position {pos.token} — skipping SL/TP check.")
             continue
 
+        # Ratchet the high-water mark, persisting any new high so the trailing
+        # stop survives restarts and is shared across guardian cycles.
+        high_water = pos.high_water_price if pos.high_water_price is not None else pos.entry_price
+        if price > high_water:
+            high_water = price
+            await pool.execute(
+                "UPDATE trade_log SET high_water_price = $1 WHERE id = $2",
+                float(high_water), pos.trade_id,
+            )
+
+        stop_price, stop_reason = _effective_stop(pos, high_water)
+
         exit_price: Decimal | None = None
         exit_reason: str | None = None
 
-        if price <= pos.stop_loss_price:
-            # Use actual current price (not SL price) — gap-downs fill at market, not limit
+        if price <= stop_price:
+            # Use actual current price (not stop price) — gap-downs fill at market, not limit
             exit_price  = price
-            exit_reason = "stop_loss"
+            exit_reason = stop_reason
         elif price >= pos.target_price:
             exit_price  = pos.target_price
             exit_reason = "target"
@@ -93,7 +123,10 @@ async def check_and_close_positions(
                 btc_benchmark_pct = float((btc_price - pos.btc_price_at_entry) / pos.btc_price_at_entry * 100)
                 btc_alpha_pct = float(pnl_pct) - btc_benchmark_pct
 
-            await pool.execute(
+            # Atomic close: only the first writer wins. The guardian and the
+            # decision cycle can fire at the same instant; the `ts_close IS NULL`
+            # guard + rowcount check prevents double-counting the same close.
+            status = await pool.execute(
                 """UPDATE trade_log
                       SET ts_close          = $1,
                           exit_price        = $2,
@@ -102,7 +135,7 @@ async def check_and_close_positions(
                           exit_reason       = $5,
                           btc_benchmark_pct = $6,
                           btc_alpha_pct     = $7
-                    WHERE id = $8""",
+                    WHERE id = $8 AND ts_close IS NULL""",
                 datetime.now(timezone.utc),
                 float(exit_price),
                 float(pnl_usd),
@@ -112,6 +145,10 @@ async def check_and_close_positions(
                 btc_alpha_pct,
                 pos.trade_id,
             )
+            if status == "UPDATE 0":
+                # Another cycle already closed this position — skip accounting.
+                log.info(f"[PAPER CLOSE] {pos.token} already closed by another cycle — skipping.")
+                continue
 
             log.info(
                 f"[PAPER CLOSE] {pos.token} via {exit_reason}: "

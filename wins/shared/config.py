@@ -14,6 +14,14 @@ DRAWDOWN_KILL_SWITCH    = Decimal("0.40")   # Pause system if down 40% in a run
 MIN_CONFIDENCE_TO_TRADE = Decimal("0.65")   # Minimum Claude confidence for entry
 MAX_OPEN_POSITIONS      = 3                 # Never hold more than 3 positions
 
+# ─── Trailing stop ───────────────────────────────────────────────────────────
+# Once a position is up by TRAILING_ACTIVATION_PCT, the stop trails the high-water
+# mark by TRAILING_STOP_PCT and only ever ratchets up — never below the original
+# stop. Protects open-position gains without an LLM call (checked every guardian
+# cycle). Set TRAILING_STOP_PCT=0 to disable.
+TRAILING_STOP_PCT       = Decimal(os.environ.get("TRAILING_STOP_PCT", "0.08"))   # trail 8% below peak
+TRAILING_ACTIVATION_PCT = Decimal(os.environ.get("TRAILING_ACTIVATION_PCT", "0.05"))  # arm once +5% in profit
+
 # ─── Claude models ───────────────────────────────────────────────────────────
 HAIKU_MODEL  = "claude-haiku-4-5-20251001"
 SONNET_MODEL = "claude-sonnet-4-6"
@@ -32,7 +40,15 @@ TRADE_MODE = os.environ.get("TRADE_MODE", "paper")   # paper | live
 if TRADE_MODE not in ("paper", "live"):
     raise ValueError(f"Invalid TRADE_MODE: {TRADE_MODE!r} — must be 'paper' or 'live'")
 
-DECISION_INTERVAL_MINUTES = int(os.environ.get("DECISION_INTERVAL_MINUTES", "15"))
+# Split cadence: Claude decision cycle runs at DECISION_INTERVAL_MINUTES (entries +
+# discretionary exits — the expensive LLM path), while a cheap guardian cycle runs
+# at MECHANICAL_INTERVAL_MINUTES to enforce stop-loss / target / trailing-stop on
+# open positions with no LLM call. Keep MECHANICAL <= DECISION.
+DECISION_INTERVAL_MINUTES   = int(os.environ.get("DECISION_INTERVAL_MINUTES", "60"))
+MECHANICAL_INTERVAL_MINUTES = int(os.environ.get("MECHANICAL_INTERVAL_MINUTES", "15"))
+# Weekly confidence-calibration job (day_of_week 0=Mon … 6=Sun, plus hour).
+CALIBRATION_DAY_OF_WEEK = int(os.environ.get("CALIBRATION_DAY_OF_WEEK", "6"))   # Sunday
+CALIBRATION_HOUR_UTC    = int(os.environ.get("CALIBRATION_HOUR_UTC", "9"))
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
 
 DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN", "")
