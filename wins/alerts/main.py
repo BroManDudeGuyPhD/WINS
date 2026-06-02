@@ -16,10 +16,56 @@ from wins.shared.config import (
     COINGECKO_API_KEY, DATABASE_URL, DRAWDOWN_KILL_SWITCH,
 )
 from wins.ingestion.collector import COINGECKO_IDS
-from wins.alerts.discord_bot import send_message, alert_daily_spend
+from wins.alerts.discord_bot import (
+    send_message, alert_daily_spend, alert_brain_health, build_brain_health_embed,
+)
 from wins.alerts.presence import read_status, set_healthcheck_enabled, is_healthcheck_enabled
 
 log = get_logger("alerts.main")
+
+# Exit-pressure scan over the last 24h, one row per open-position token.
+# Shared by the daily brain-health post and the /brainhealth slash command.
+_BRAIN_HEALTH_QUERY = """
+    WITH open_pos AS (
+        SELECT token, MIN(ts_open) AS first_open, COUNT(*) AS lots
+          FROM trade_log
+         WHERE ts_close IS NULL AND side = 'buy'
+         GROUP BY token
+    ),
+    recent AS (
+        SELECT token,
+               COUNT(*)                                   AS total_decisions,
+               COUNT(*) FILTER (WHERE action = 'sell')    AS sell_signals,
+               COALESCE(
+                   ROUND(AVG(confidence) FILTER (WHERE action = 'sell'), 2),
+                   0
+               )                                          AS avg_sell_conf,
+               COUNT(*) FILTER (
+                   WHERE action = 'sell' AND risk_flag = 'high'
+               )                                          AS blocked_high
+          FROM decision_log
+         WHERE ts >= NOW() - INTERVAL '24 hours'
+         GROUP BY token
+    )
+    SELECT
+        o.token,
+        (NOW()::date - o.first_open::date)             AS days_held,
+        o.lots                                         AS lots,
+        COALESCE(r.total_decisions, 0)                 AS total_decisions,
+        COALESCE(r.sell_signals, 0)                    AS sell_signals,
+        COALESCE(r.avg_sell_conf, 0)                   AS avg_sell_conf,
+        COALESCE(r.blocked_high, 0)                    AS blocked_high,
+        (SELECT reasoning
+           FROM decision_log
+          WHERE token = o.token
+            AND action = 'sell'
+            AND ts >= NOW() - INTERVAL '24 hours'
+          ORDER BY ts DESC
+          LIMIT 1)                                     AS last_sell_reason
+      FROM open_pos o
+      LEFT JOIN recent r USING (token)
+     ORDER BY sell_signals DESC, total_decisions DESC
+"""
 
 _GREEN  = 0x2ecc71
 _RED    = 0xe74c3c
@@ -145,6 +191,12 @@ class WINSBot(discord.Client):
                 await alert_daily_spend([dict(r) for r in rows])
             except Exception as exc:
                 log.warning(f"Daily spend summary failed: {exc}")
+
+            try:
+                health_rows = await self._pool.fetch(_BRAIN_HEALTH_QUERY)
+                await alert_brain_health([dict(r) for r in health_rows])
+            except Exception as exc:
+                log.warning(f"Brain health summary failed: {exc}")
 
     async def _presence_loop(self) -> None:
         """Poll the shared status file every 5 s and update bot presence."""
@@ -290,6 +342,37 @@ def _register_commands(bot: WINSBot) -> None:
         for f in fields:
             embed.add_field(name=f["name"], value=f["value"], inline=False)
 
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+
+    @bot.tree.command(name="brainhealth", description="Exit-pressure scan: where the brain wants to sell but can't")
+    async def brainhealth(interaction: discord.Interaction) -> None:
+        if bot._owner_id and interaction.user.id != bot._owner_id:
+            await interaction.response.send_message(
+                "⛔ You are not authorised to control WINS.", ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        if not bot._pool:
+            await interaction.followup.send(
+                embed=discord.Embed(title="❌ Database unavailable", color=_RED),
+                ephemeral=True,
+            )
+            return
+
+        try:
+            rows = await bot._pool.fetch(_BRAIN_HEALTH_QUERY)
+        except Exception as exc:
+            log.warning(f"/brainhealth DB query failed: {exc}")
+            await interaction.followup.send(
+                embed=discord.Embed(title="❌ DB query failed", description=str(exc), color=_RED),
+                ephemeral=True,
+            )
+            return
+
+        embed = discord.Embed.from_dict(build_brain_health_embed([dict(r) for r in rows]))
         await interaction.followup.send(embed=embed, ephemeral=True)
 
 
