@@ -112,9 +112,11 @@ def validate_decision(
             "System paused. Manual review required."
         )
 
-    # 8. Risk flag — caution reduces allowed confidence band; high blocks trade
-    if decision.risk_flag.value == "high":
-        return False, "Claude flagged risk_flag=high — trade blocked."
+    # 8. Risk flag — high blocks new entries only. Exits must NOT be blocked:
+    # a high-risk read is exactly when a discretionary sell is most useful, and
+    # blocking it traps the position (it can only leave via the mechanical stop).
+    if decision.action == Action.buy and decision.risk_flag.value == "high":
+        return False, "Claude flagged risk_flag=high — entry blocked."
 
     return True, "All risk checks passed."
 

@@ -44,6 +44,11 @@ def _hold(**kwargs) -> DecisionOutput:
     return d.model_copy(update={"action": Action.hold})
 
 
+def _sell(**kwargs) -> DecisionOutput:
+    d = _buy(**kwargs)
+    return d.model_copy(update={"action": Action.sell})
+
+
 CAPITAL      = Decimal("1000.00")
 OPEN_POS     = 0
 STARTING_CAP = Decimal("1000.00")
@@ -215,6 +220,40 @@ def test_risk_flag_caution_passes():
     d = _buy(risk_flag=RiskFlag.caution)
     ok, _ = validate_decision(d, CAPITAL, OPEN_POS, STARTING_CAP)
     assert ok
+
+
+# ─── Rule 8 (exits): risk_flag=high must NOT block a sell ─────────────────────
+# Regression: a high-risk read is exactly when a discretionary exit is most
+# useful. Blocking it traps the position (it can only leave via the stop).
+
+def test_sell_with_risk_flag_high_allowed():
+    d = _sell(risk_flag=RiskFlag.high)
+    ok, reason = validate_decision(
+        d, CAPITAL, open_positions=1, starting_capital_usd=STARTING_CAP,
+        held_tokens={"SOL"},
+    )
+    assert ok, f"Exit should not be blocked by risk_flag=high, got: {reason}"
+
+
+def test_sell_during_macro_block_allowed():
+    # Sells must be allowed during risk-off — that is when exits matter most.
+    d = _sell(macro_gate=MacroGate.block, risk_flag=RiskFlag.high)
+    ok, reason = validate_decision(
+        d, CAPITAL, open_positions=1, starting_capital_usd=STARTING_CAP,
+        held_tokens={"SOL"},
+    )
+    assert ok, f"Exit should not be blocked during macro risk-off, got: {reason}"
+
+
+def test_sell_unheld_token_rejected():
+    # Can't sell what we don't hold.
+    d = _sell()
+    ok, reason = validate_decision(
+        d, CAPITAL, open_positions=1, starting_capital_usd=STARTING_CAP,
+        held_tokens={"ETH"},
+    )
+    assert not ok
+    assert "not in open positions" in reason
 
 
 # ─── Happy path — all checks pass ────────────────────────────────────────────

@@ -312,6 +312,98 @@ async def alert_calibration_report(rows: list[dict]) -> None:
     })
 
 
+def build_brain_health_embed(rows: list[dict]) -> dict:
+    """Build the brain-health embed dict from open-position exit-pressure rows.
+
+    Surfaces positions the brain repeatedly wants to *sell* but that are still
+    open — i.e. trapped exit pressure — so a human can review and intervene.
+    `rows` is one dict per open position with keys: token, days_held, lots,
+    total_decisions, sell_signals, avg_sell_conf, blocked_high, last_sell_reason.
+
+    Returns a Discord embed dict — usable both for DM posts (wrap in
+    {"embeds": [...]}) and for slash commands (discord.Embed.from_dict(...)).
+    """
+    if not rows:
+        return {
+            "title": "🧠 Brain Health",
+            "description": "No open positions — nothing to review.",
+            "color": _GREEN,
+            "footer": {"text": "WINS · exit-pressure scan · last 24 h"},
+        }
+
+    fields = []
+    overall = 0   # 0 calm, 1 moderate, 2 high
+    any_blocked = False
+
+    for r in sorted(rows, key=lambda x: int(x["sell_signals"]), reverse=True):
+        token        = r["token"]
+        total        = int(r["total_decisions"])
+        sells        = int(r["sell_signals"])
+        avg_conf     = float(r["avg_sell_conf"] or 0)
+        blocked      = int(r["blocked_high"])
+        days_held    = int(r["days_held"])
+        lots         = int(r.get("lots", 1) or 1)
+        reason       = (r["last_sell_reason"] or "").strip()
+
+        ratio = (sells / total) if total else 0.0
+
+        # Position stress: sell pressure, escalated if exits are being blocked.
+        if ratio >= 0.5 or blocked > 0:
+            level, emoji = 2, "🔴"
+        elif ratio >= 0.2:
+            level, emoji = 1, "🟡"
+        else:
+            level, emoji = 0, "🟢"
+        overall = max(overall, level)
+        if blocked > 0:
+            any_blocked = True
+
+        lines = [
+            f"Sell signals: `{sells}/{total}` (`{ratio:.0%}` of decisions)",
+        ]
+        if sells:
+            lines.append(f"Avg sell conviction: `{avg_conf:.2f}`")
+        if blocked > 0:
+            lines.append(f"🚫 `{blocked}` exit(s) blocked by `risk=high`")
+        held_line = f"Held: `{days_held}d`"
+        if lots > 1:
+            held_line += f" · ⚠️ `{lots}` lots (duplicate?)"
+        lines.append(held_line)
+        if reason:
+            lines.append(f"> {reason[:180]}")
+
+        fields.append({
+            "name":   f"{emoji} `{token}`",
+            "value":  "\n".join(lines),
+            "inline": False,
+        })
+
+    if overall == 2:
+        color = _RED
+        header = "⚠️ Brain wants out — **manual review recommended**"
+        if any_blocked:
+            header += "\n🚫 One or more exits are being **blocked** — the brain wants to sell but can't."
+    elif overall == 1:
+        color = _YELLOW
+        header = "Some exit pressure building — keep an eye on it."
+    else:
+        color = _GREEN
+        header = "Brain calm — no meaningful exit pressure on open positions."
+
+    return {
+        "title":       "🧠 Brain Health",
+        "description": header,
+        "color":       color,
+        "fields":      fields,
+        "footer":      {"text": "WINS · exit-pressure scan · last 24 h"},
+    }
+
+
+async def alert_brain_health(rows: list[dict]) -> None:
+    """Post the daily brain-health signal as a DM embed."""
+    await _send({"embeds": [build_brain_health_embed(rows)]})
+
+
 async def alert_daily_spend(rows: list[dict]) -> None:
     """Post a daily token spend summary grouped by model."""
     if not rows:
