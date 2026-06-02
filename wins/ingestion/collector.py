@@ -328,6 +328,21 @@ async def fetch_news_summary(client: httpx.AsyncClient, symbol: str) -> str:
 
 # ─── Main bundle assembly ─────────────────────────────────────────────────────
 
+async def collect_current_prices(
+    symbols: list[str],
+) -> tuple[dict[str, Decimal], Decimal | None]:
+    """Lightweight price-only fetch for the guardian cycle.
+
+    No social/GitHub/news/LLM — just CoinGecko spot prices for the given tokens
+    plus BTC (used for the benchmark on close). Returns ({symbol: price}, btc_price).
+    """
+    want = list({*symbols, "BTC"})
+    async with httpx.AsyncClient(timeout=httpx.Timeout(15.0)) as client:
+        snaps = await fetch_prices(client, want)
+    prices = {sym: snap.price_usd for sym, snap in snaps.items()}
+    return prices, prices.get("BTC")
+
+
 async def collect_signal_bundles() -> list[SignalBundle]:
     """
     Called once per decision cycle.
