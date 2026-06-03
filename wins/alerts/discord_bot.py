@@ -456,15 +456,99 @@ def build_daily_spend_embed(rows: list[dict]) -> dict:
     }
 
 
-async def alert_daily_summary(spend_rows: list[dict], health_rows: list[dict]) -> None:
-    """Post the daily digest as a SINGLE message with two embeds: token spend
-    plus the brain-health exit-pressure signal. One message, not two."""
-    await _send({
-        "embeds": [
-            build_daily_spend_embed(spend_rows),
-            build_brain_health_embed(health_rows),
-        ]
-    })
+def build_system_health_embed(h: dict) -> dict:
+    """Build the system-health embed from a metrics dict with keys: capital,
+    starting_capital, open_cost, open_positions, paused, pause_reason,
+    decisions_24h, last_decision_min, closes (list of {exit_reason,n,avg_pnl}),
+    last_trade_days, drawdown_kill_pct."""
+    capital      = float(h.get("capital") or 0)
+    starting     = float(h.get("starting_capital") or 0) or 1.0
+    open_cost    = float(h.get("open_cost") or 0)
+    equity       = capital + open_cost
+    drawdown     = max(0.0, (starting - equity) / starting)
+    kill_pct     = float(h.get("drawdown_kill_pct") or 0.40)
+    paused       = bool(h.get("paused"))
+    last_dec_min = h.get("last_decision_min")
+    decisions    = int(h.get("decisions_24h") or 0)
+
+    # Health colour: red if paused / near kill switch / stale; yellow if warming.
+    stale = last_dec_min is None or last_dec_min > 40
+    if paused or drawdown >= kill_pct * 0.75 or stale:
+        color = _RED
+    elif drawdown >= kill_pct * 0.5 or decisions == 0:
+        color = _YELLOW
+    else:
+        color = _GREEN
+
+    closes = h.get("closes") or []
+    if closes:
+        closes_str = " · ".join(
+            f"{c['n']}× {c['exit_reason']} ({c['avg_pnl']:+.1f}%)" for c in closes
+        )
+    else:
+        closes_str = "none"
+
+    last_dec_str = "unknown" if last_dec_min is None else f"{int(last_dec_min)}m ago"
+    last_trade   = h.get("last_trade_days")
+    last_trade_str = "never" if last_trade is None else f"{int(last_trade)}d ago"
+
+    fields = [
+        {"name": "Capital",        "value": f"`${capital:.2f}` cash + `${open_cost:.2f}` in {h.get('open_positions', 0)} pos", "inline": True},
+        {"name": "Drawdown",       "value": f"`{drawdown:.1%}` of `${starting:.0f}` (kill `{kill_pct:.0%}`)", "inline": True},
+        {"name": "Brain",          "value": f"`{decisions}` decisions/24h · last `{last_dec_str}`", "inline": True},
+        {"name": "Closes (24h)",   "value": f"`{closes_str}`", "inline": False},
+        {"name": "Last entry",     "value": f"`{last_trade_str}`", "inline": True},
+    ]
+    desc = "⏸️ **SYSTEM PAUSED** — " + (h.get("pause_reason") or "manual review required") if paused else "Running."
+
+    return {
+        "title":  "🩺 System Health",
+        "description": desc,
+        "color":  color,
+        "fields": fields,
+        "footer": {"text": "WINS · last 24 h"},
+    }
+
+
+async def alert_daily_summary(
+    spend_rows: list[dict],
+    health_rows: list[dict],
+    system_health: dict | None = None,
+) -> None:
+    """Post the daily digest as a SINGLE message: system health, token spend, and
+    the brain-health exit-pressure signal. One message, multiple embeds."""
+    embeds = []
+    if system_health is not None:
+        embeds.append(build_system_health_embed(system_health))
+    embeds.append(build_daily_spend_embed(spend_rows))
+    embeds.append(build_brain_health_embed(health_rows))
+    await _send({"embeds": embeds})
+
+
+async def alert_liveness(is_down: bool, minutes: float) -> None:
+    """Proactive watchdog alert: brain stopped logging decisions, or recovered."""
+    if is_down:
+        await _send({
+            "embeds": [{
+                "title": "🚨 Brain may be DOWN",
+                "description": (
+                    f"No decision logged in **{int(minutes)} min**. The brain "
+                    f"container may be crashed, hung, or stuck restarting.\n"
+                    f"Check: `ssh ironman \"docker ps | grep wins-brain\"`"
+                ),
+                "color": _RED,
+                "footer": {"text": "WINS · liveness watchdog"},
+            }]
+        })
+    else:
+        await _send({
+            "embeds": [{
+                "title": "✅ Brain recovered",
+                "description": f"Decisions are flowing again (was stale for ~{int(minutes)} min).",
+                "color": _GREEN,
+                "footer": {"text": "WINS · liveness watchdog"},
+            }]
+        })
 
 
 async def alert_daily_spend(rows: list[dict]) -> None:
