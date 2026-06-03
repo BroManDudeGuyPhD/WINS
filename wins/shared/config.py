@@ -49,6 +49,12 @@ MECHANICAL_INTERVAL_MINUTES = int(os.environ.get("MECHANICAL_INTERVAL_MINUTES", 
 # Weekly confidence-calibration job (day_of_week 0=Mon … 6=Sun, plus hour).
 CALIBRATION_DAY_OF_WEEK = int(os.environ.get("CALIBRATION_DAY_OF_WEEK", "6"))   # Sunday
 CALIBRATION_HOUR_UTC    = int(os.environ.get("CALIBRATION_HOUR_UTC", "9"))
+
+# Liveness watchdog (alerts service): proactively warns if the brain stops
+# logging decisions. Threshold should be a couple of decision cycles so a single
+# slow cycle doesn't trip it.
+LIVENESS_STALE_MINUTES = int(os.environ.get("LIVENESS_STALE_MINUTES", "40"))
+LIVENESS_CHECK_MINUTES = int(os.environ.get("LIVENESS_CHECK_MINUTES", "5"))
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
 
 DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN", "")

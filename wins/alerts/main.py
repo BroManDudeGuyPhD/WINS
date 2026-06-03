@@ -14,10 +14,11 @@ from wins.shared.logger import get_logger
 from wins.shared.config import (
     DISCORD_BOT_TOKEN, DISCORD_USER_ID, DISCORD_GUILD_ID,
     COINGECKO_API_KEY, DATABASE_URL, DRAWDOWN_KILL_SWITCH,
+    LIVENESS_STALE_MINUTES, LIVENESS_CHECK_MINUTES,
 )
 from wins.ingestion.collector import COINGECKO_IDS
 from wins.alerts.discord_bot import (
-    send_message, alert_daily_summary, build_brain_health_embed,
+    send_message, alert_daily_summary, build_brain_health_embed, alert_liveness,
 )
 from wins.alerts.presence import read_status, set_healthcheck_enabled, is_healthcheck_enabled
 
@@ -137,6 +138,7 @@ class WINSBot(discord.Client):
                 )
         self.loop.create_task(self._presence_loop())
         self.loop.create_task(self._daily_spend_loop())
+        self.loop.create_task(self._liveness_loop())
 
     async def on_ready(self) -> None:
         log.info(f"WINS Alerts service started. Logged in as {self.user}")
@@ -190,12 +192,76 @@ class WINSBot(discord.Client):
                         ORDER BY model_used"""
                 )
                 health_rows = await self._pool.fetch(_BRAIN_HEALTH_QUERY)
+                sys_health = await self._collect_system_health()
                 await alert_daily_summary(
                     [dict(r) for r in spend_rows],
                     [dict(r) for r in health_rows],
+                    sys_health,
                 )
             except Exception as exc:
                 log.warning(f"Daily summary failed: {exc}")
+
+    async def _collect_system_health(self) -> dict:
+        """Snapshot for the daily System Health embed."""
+        state = await self._pool.fetchrow(
+            "SELECT capital_usd, run_starting_capital, open_positions, "
+            "system_paused, pause_reason FROM system_state ORDER BY id DESC LIMIT 1"
+        )
+        dec = await self._pool.fetchrow(
+            "SELECT COUNT(*) AS n, MAX(ts) AS last_ts FROM decision_log "
+            "WHERE ts >= NOW() - INTERVAL '24 hours'"
+        )
+        open_cost = await self._pool.fetchval(
+            "SELECT COALESCE(SUM(qty*entry_price),0) FROM trade_log "
+            "WHERE ts_close IS NULL AND side='buy'"
+        )
+        closes = await self._pool.fetch(
+            "SELECT exit_reason, COUNT(*) AS n, ROUND(AVG(pnl_pct),2) AS avg_pnl "
+            "FROM trade_log WHERE ts_close >= NOW() - INTERVAL '24 hours' "
+            "GROUP BY exit_reason ORDER BY n DESC"
+        )
+        last_open = await self._pool.fetchval("SELECT MAX(ts_open) FROM trade_log")
+
+        now = datetime.now(timezone.utc)
+        last_ts = dec["last_ts"] if dec else None
+        return {
+            "capital":            float(state["capital_usd"]) if state else 0.0,
+            "starting_capital":   float(state["run_starting_capital"]) if state and state["run_starting_capital"] else 0.0,
+            "open_cost":          float(open_cost or 0),
+            "open_positions":     state["open_positions"] if state else 0,
+            "paused":             bool(state["system_paused"]) if state else False,
+            "pause_reason":       state["pause_reason"] if state else None,
+            "decisions_24h":      dec["n"] if dec else 0,
+            "last_decision_min":  (now - last_ts).total_seconds() / 60 if last_ts else None,
+            "closes":             [{"exit_reason": c["exit_reason"] or "?", "n": c["n"], "avg_pnl": float(c["avg_pnl"] or 0)} for c in closes],
+            "last_trade_days":    (now - last_open).total_seconds() / 86400 if last_open else None,
+            "drawdown_kill_pct":  float(DRAWDOWN_KILL_SWITCH),
+        }
+
+    async def _liveness_loop(self) -> None:
+        """Watchdog: alert if the brain stops logging decisions, and again when it
+        recovers. Runs in the alerts service so it survives a brain crash."""
+        await self.wait_until_ready()
+        was_down = False
+        while not self.is_closed():
+            await asyncio.sleep(LIVENESS_CHECK_MINUTES * 60)
+            if self.is_closed() or not self._pool:
+                continue
+            try:
+                last_ts = await self._pool.fetchval("SELECT MAX(ts) FROM decision_log")
+                if last_ts is None:
+                    continue
+                stale_min = (datetime.now(timezone.utc) - last_ts).total_seconds() / 60
+                if stale_min >= LIVENESS_STALE_MINUTES and not was_down:
+                    log.warning(f"Liveness: brain stale for {stale_min:.0f} min — alerting.")
+                    await alert_liveness(is_down=True, minutes=stale_min)
+                    was_down = True
+                elif stale_min < LIVENESS_STALE_MINUTES and was_down:
+                    log.info("Liveness: brain recovered — alerting.")
+                    await alert_liveness(is_down=False, minutes=stale_min)
+                    was_down = False
+            except Exception as exc:
+                log.warning(f"Liveness check failed (not flipping state): {exc}")
 
     async def _presence_loop(self) -> None:
         """Poll the shared status file every 5 s and update bot presence."""
