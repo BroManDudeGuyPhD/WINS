@@ -404,18 +404,15 @@ async def alert_brain_health(rows: list[dict]) -> None:
     await _send({"embeds": [build_brain_health_embed(rows)]})
 
 
-async def alert_daily_spend(rows: list[dict]) -> None:
-    """Post a daily token spend summary grouped by model."""
+def build_daily_spend_embed(rows: list[dict]) -> dict:
+    """Build the daily token-spend embed dict, grouped by model."""
     if not rows:
-        await _send({
-            "embeds": [{
-                "title": "📈 Daily Spend Summary",
-                "description": "No Claude calls in the last 24 hours.",
-                "color": _BLUE,
-                "footer": {"text": "WINS · last 24 h"},
-            }]
-        })
-        return
+        return {
+            "title": "📈 Daily Spend Summary",
+            "description": "No Claude calls in the last 24 hours.",
+            "color": _BLUE,
+            "footer": {"text": "WINS · last 24 h"},
+        }
 
     fields = []
     total_cost = 0.0
@@ -450,12 +447,26 @@ async def alert_daily_spend(rows: list[dict]) -> None:
 
     color = _GREEN if total_cost < 0.10 else (_YELLOW if total_cost < 1.00 else _RED)
 
+    return {
+        "title":       "📈 Daily Spend Summary",
+        "description": f"**{total_decisions} decisions · Est. total: `${total_cost:.4f}`**",
+        "color":       color,
+        "fields":      fields,
+        "footer":      {"text": "WINS · last 24 h · prices approximate"},
+    }
+
+
+async def alert_daily_summary(spend_rows: list[dict], health_rows: list[dict]) -> None:
+    """Post the daily digest as a SINGLE message with two embeds: token spend
+    plus the brain-health exit-pressure signal. One message, not two."""
     await _send({
-        "embeds": [{
-            "title":       "📈 Daily Spend Summary",
-            "description": f"**{total_decisions} decisions · Est. total: `${total_cost:.4f}`**",
-            "color":       color,
-            "fields":      fields,
-            "footer":      {"text": "WINS · last 24 h · prices approximate"},
-        }]
+        "embeds": [
+            build_daily_spend_embed(spend_rows),
+            build_brain_health_embed(health_rows),
+        ]
     })
+
+
+async def alert_daily_spend(rows: list[dict]) -> None:
+    """Post just the daily token spend summary (kept for standalone use)."""
+    await _send({"embeds": [build_daily_spend_embed(rows)]})

@@ -17,7 +17,7 @@ from wins.shared.config import (
 )
 from wins.ingestion.collector import COINGECKO_IDS
 from wins.alerts.discord_bot import (
-    send_message, alert_daily_spend, alert_brain_health, build_brain_health_embed,
+    send_message, alert_daily_summary, build_brain_health_embed,
 )
 from wins.alerts.presence import read_status, set_healthcheck_enabled, is_healthcheck_enabled
 
@@ -167,7 +167,8 @@ class WINSBot(discord.Client):
         await super().close()
 
     async def _daily_spend_loop(self) -> None:
-        """Post a spend summary at midnight UTC each day."""
+        """Post the daily digest (spend + brain health) at midnight UTC each day,
+        as a single message."""
         await self.wait_until_ready()
         while not self.is_closed():
             now = datetime.now(timezone.utc)
@@ -176,7 +177,7 @@ class WINSBot(discord.Client):
             if self.is_closed() or not self._pool:
                 break
             try:
-                rows = await self._pool.fetch(
+                spend_rows = await self._pool.fetch(
                     """SELECT model_used,
                               COUNT(*)                            AS decisions,
                               COALESCE(SUM(prompt_tokens),    0)  AS prompt_tokens,
@@ -188,15 +189,13 @@ class WINSBot(discord.Client):
                         GROUP BY model_used
                         ORDER BY model_used"""
                 )
-                await alert_daily_spend([dict(r) for r in rows])
-            except Exception as exc:
-                log.warning(f"Daily spend summary failed: {exc}")
-
-            try:
                 health_rows = await self._pool.fetch(_BRAIN_HEALTH_QUERY)
-                await alert_brain_health([dict(r) for r in health_rows])
+                await alert_daily_summary(
+                    [dict(r) for r in spend_rows],
+                    [dict(r) for r in health_rows],
+                )
             except Exception as exc:
-                log.warning(f"Brain health summary failed: {exc}")
+                log.warning(f"Daily summary failed: {exc}")
 
     async def _presence_loop(self) -> None:
         """Poll the shared status file every 5 s and update bot presence."""
