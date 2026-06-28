@@ -139,16 +139,14 @@ class WINSBot(discord.Client):
         self.loop.create_task(self._presence_loop())
         self.loop.create_task(self._daily_spend_loop())
         self.loop.create_task(self._liveness_loop())
+        self.loop.create_task(self._db_reconnect_loop())
 
     async def on_ready(self) -> None:
         log.info(f"WINS Alerts service started. Logged in as {self.user}")
-        # Connect to DB for slash commands that need position data
-        if DATABASE_URL:
-            try:
-                self._pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=3)
-                log.info("DB pool connected")
-            except Exception as exc:
-                log.warning(f"DB pool failed: {exc}")
+        # Connect to DB for slash commands that need position data. A single
+        # attempt here keeps startup snappy; _db_reconnect_loop owns retries so
+        # a DB that is still starting up (e.g. after a power outage) self-heals.
+        await self._connect_pool()
         # Read persisted setting — default is OFF if file doesn't exist yet
         enabled = is_healthcheck_enabled()
         label = "ON" if enabled else "OFF"
@@ -167,6 +165,48 @@ class WINSBot(discord.Client):
         if self._pool:
             await self._pool.close()
         await super().close()
+
+    async def _connect_pool(self) -> bool:
+        """Try once to (re)establish the asyncpg pool. Returns True on success."""
+        if not DATABASE_URL:
+            return False
+        try:
+            self._pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=3)
+            log.info("DB pool connected")
+            return True
+        except Exception as exc:
+            log.warning(f"DB pool failed: {exc}")
+            self._pool = None
+            return False
+
+    async def _db_reconnect_loop(self) -> None:
+        """Keep the DB pool alive. Reconnects with backoff when the pool is
+        missing (e.g. the DB was still starting up at boot) and recycles a pool
+        whose connections have gone stale, so slash commands self-heal without a
+        container restart."""
+        await self.wait_until_ready()
+        backoff = 5
+        while not self.is_closed():
+            if self._pool is None:
+                if await self._connect_pool():
+                    backoff = 5
+                else:
+                    await asyncio.sleep(backoff)
+                    backoff = min(backoff * 2, 300)
+                    continue
+            else:
+                # Probe liveness; recycle the pool if the DB has gone away.
+                try:
+                    await self._pool.fetchval("SELECT 1")
+                except Exception as exc:
+                    log.warning(f"DB pool unhealthy, recycling: {exc}")
+                    try:
+                        await self._pool.close()
+                    except Exception:
+                        pass
+                    self._pool = None
+                    continue
+            await asyncio.sleep(30)
 
     async def _daily_spend_loop(self) -> None:
         """Post the daily digest (spend + brain health) at midnight UTC each day,
