@@ -232,6 +232,26 @@ async def run_cycle() -> None:
         capital, open_positions = await _apply_closures(
             closed, capital, open_positions, held_tokens
         )
+        if closed:
+            # Persist the recovered capital NOW. Otherwise a cycle where every
+            # decision is 'hold' discards this credit — only the buy/sell paths
+            # below call _persist_state — silently diverging cash from the trade
+            # ledger and faking drawdown (this caused a false kill switch).
+            await _persist_state(pool, capital, open_positions)
+            # Refresh the open-position views so closed rows don't leak into
+            # Claude's context, held_tokens, or the drawdown calc below.
+            open_position_rows = await pool.fetch(
+                """SELECT id, token, qty, entry_price, stop_loss_price, target_price,
+                          ts_open, exchange_order_id, btc_price_at_entry
+                     FROM trade_log
+                    WHERE ts_close IS NULL AND side = 'buy'"""
+            )
+            open_position_cost = sum(
+                (Decimal(str(r["qty"])) * Decimal(str(r["entry_price"])) for r in open_position_rows),
+                Decimal("0"),
+            )
+            held_tokens = {r["token"] for r in open_position_rows}
+            open_positions_by_token = {r["token"]: r for r in open_position_rows}
 
     executor = get_executor()
 
