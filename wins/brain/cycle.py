@@ -31,6 +31,28 @@ from wins.alerts.presence import write_status
 
 log = get_logger("brain.cycle")
 
+# Serializes the decision cycle against the guardian cycle. Both run as separate
+# jobs on the same asyncio event loop and mutate system_state.capital_usd via a
+# read-modify-write. Without this lock they interleave at an await, and one side's
+# blind persist clobbers the other's — a dropped guardian close-credit once froze
+# capital at a position's cost basis and faked a 43% drawdown, tripping the kill
+# switch. Holding the lock across each full cycle makes the update atomic.
+#
+# Bound lazily to the running loop (and rebuilt if the loop changes) so it works
+# both under the single production loop and under a fresh loop-per-test suite,
+# where a module-level Lock would raise "bound to a different event loop".
+_cycle_lock: asyncio.Lock | None = None
+_cycle_lock_loop: asyncio.AbstractEventLoop | None = None
+
+
+def _get_cycle_lock() -> asyncio.Lock:
+    global _cycle_lock, _cycle_lock_loop
+    loop = asyncio.get_running_loop()
+    if _cycle_lock is None or _cycle_lock_loop is not loop:
+        _cycle_lock = asyncio.Lock()
+        _cycle_lock_loop = loop
+    return _cycle_lock
+
 
 async def _get_system_state(pool: asyncpg.Pool) -> dict:
     row = await pool.fetchrow(
@@ -141,7 +163,15 @@ async def run_guardian_cycle() -> None:
     frequency so gains are protected and losses capped without paying for an LLM
     call every few minutes. Live exits are managed by exchange-side stop orders,
     so this is paper-only.
+
+    Wrapper: serialize against the decision cycle so their capital writes can't
+    clobber one another (see _get_cycle_lock).
     """
+    async with _get_cycle_lock():
+        await _run_guardian_cycle()
+
+
+async def _run_guardian_cycle() -> None:
     if TRADE_MODE != "paper":
         return
     pool = await get_pool()
@@ -181,6 +211,13 @@ async def run_guardian_cycle() -> None:
 
 
 async def run_cycle() -> None:
+    """Wrapper: serialize against the guardian cycle so their capital writes can't
+    clobber one another (see _get_cycle_lock)."""
+    async with _get_cycle_lock():
+        await _run_cycle()
+
+
+async def _run_cycle() -> None:
     pool = await get_pool()
     state = await _get_system_state(pool)
 
